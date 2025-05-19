@@ -1,6 +1,3 @@
-<think>
-
-</think>
 
 // OAuth 2.0 constants
 const CLIENT_ID = '304162096302-c470kd77du16s0lrlumobc6s8u6uleng.apps.googleusercontent.com';
@@ -412,9 +409,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
       try {
         // Get API key for the Gemini service
-        const result = await chrome.storage.local.get(['aiApiKey', 'aiModel']);
-        const apiKey = result.aiApiKey;
-        const aiModel = result.aiModel || 'standard';
+        const storageResult = await chrome.storage.local.get(['aiApiKey', 'aiModel']);
+        const apiKey = storageResult.aiApiKey;
+        const aiModel = storageResult.aiModel || 'standard';
         
         if (!apiKey) {
           console.log('No API key found');
