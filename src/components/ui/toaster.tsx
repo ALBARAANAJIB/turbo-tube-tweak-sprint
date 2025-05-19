@@ -24,15 +24,16 @@ export function Toaster() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ 
-                duration: 0.3,
-                ease: "easeInOut"
+                duration: 0.4,
+                ease: "easeOut"
               }}
+              className="relative z-50"
             >
               <Toast key={id} {...props}>
                 <div className="grid gap-1">
-                  {title && <ToastTitle>{title}</ToastTitle>}
+                  {title && <ToastTitle className="text-base">{title}</ToastTitle>}
                   {description && (
-                    <ToastDescription>{description}</ToastDescription>
+                    <ToastDescription className="text-sm">{description}</ToastDescription>
                   )}
                 </div>
                 {action}
@@ -42,7 +43,7 @@ export function Toaster() {
           )
         })}
       </AnimatePresence>
-      <ToastViewport />
+      <ToastViewport className="fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:right-0 sm:top-auto sm:bottom-0 sm:flex-col md:max-w-[420px]" />
     </ToastProvider>
   )
 }
