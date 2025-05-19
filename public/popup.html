@@ -1,0 +1,112 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Enhancer</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="popup-container">
+    <div class="header">
+      <div class="logo-wrapper">
+        <img src="icons/icon.png" alt="YouTube Enhancer" class="logo">
+        <h1>YouTube Enhancer</h1>
+      </div>
+    </div>
+    
+    <div id="login-container">
+      <div class="login-card">
+        <h2>Get Started</h2>
+        <p>Connect your YouTube account to manage and organize your liked videos.</p>
+        <button id="login-button" class="primary-button">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right: 8px;">
+            <path d="M23.498 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47a5.53 5.53 0 0 1-2.4 3.58v3h3.86c2.26-2.09 3.57-5.17 3.57-8.82Z" fill="#4285F4"/>
+            <path d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09A12 12 0 0 0 12 24Z" fill="#34A853"/>
+            <path d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.13-1.57.38-2.29V6.62H1.29a11.86 11.86 0 0 0 0 10.76l3.98-3.09Z" fill="#FBBC05"/>
+            <path d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.27 0 3.25 2.69 1.29 6.62l3.98 3.09C6.22 6.86 8.87 4.75 12 4.75Z" fill="#EA4335"/>
+          </svg>
+          Sign in with YouTube
+        </button>
+      </div>
+    </div>
+    
+    <div id="features-container" style="display: none;">
+      <div class="user-info">
+        <div class="avatar">
+          <span class="avatar-initial" id="user-initial">A</span>
+        </div>
+        <span id="user-email">user@example.com</span>
+      </div>
+      
+      <div class="features-grid">
+        <div class="feature-card primary" id="fetch-videos-card">
+          <div class="feature-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m12 15 3-3m0 0-3-3m3 3H4"/>
+              <path d="M20 21v-7a4 4 0 0 0-4-4H8"/>
+            </svg>
+          </div>
+          <div class="feature-content">
+            <h3>Fetch Videos</h3>
+            <p>Get your latest liked videos from YouTube</p>
+          </div>
+          <button id="fetch-videos" class="feature-btn">Fetch Now</button>
+        </div>
+        
+        <div class="feature-card" id="dashboard-card">
+          <div class="feature-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="7" height="9" x="3" y="3" rx="1"/>
+              <rect width="7" height="5" x="14" y="3" rx="1"/>
+              <rect width="7" height="9" x="14" y="12" rx="1"/>
+              <rect width="7" height="5" x="3" y="16" rx="1"/>
+            </svg>
+          </div>
+          <div class="feature-content">
+            <h3>Dashboard</h3>
+            <p>View and manage your liked videos</p>
+          </div>
+          <button id="open-dashboard" class="feature-btn">Open</button>
+        </div>
+        
+        <div class="feature-card" id="export-card">
+          <div class="feature-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" x2="12" y1="15" y2="3"/>
+            </svg>
+          </div>
+          <div class="feature-content">
+            <h3>Export Data</h3>
+            <p>Download your liked videos as JSON</p>
+          </div>
+          <button id="export-data" class="feature-btn">Export</button>
+        </div>
+        
+        <div class="feature-card" id="ai-card">
+          <div class="feature-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+              <path d="M19 9v1a7 7 0 0 1-14 0V9"/>
+              <line x1="12" x2="12" y1="19" y2="22"/>
+            </svg>
+          </div>
+          <div class="feature-content">
+            <h3>AI Summary</h3>
+            <p>Generate summaries of your video collection</p>
+          </div>
+          <button id="ai-summary" class="feature-btn">Generate</button>
+        </div>
+      </div>
+      
+      <div class="footer">
+        <button id="sign-out" class="text-button">Sign out</button>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

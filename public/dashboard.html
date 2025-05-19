@@ -1,0 +1,83 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Enhancer Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="dashboard-container">
+    <header>
+      <div class="header-content">
+        <div class="logo-container">
+          <img src="icons/icon.png" alt="YouTube Enhancer" class="logo">
+          <h1>YouTube Enhancer Dashboard</h1>
+        </div>
+        <div class="user-info">
+          <div class="avatar">
+            <span class="avatar-initial" id="user-initial">A</span>
+          </div>
+          <span id="user-email">user@example.com</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div class="dashboard-header">
+        <h2>Your Liked Videos</h2>
+        <div class="actions">
+          <div class="search-container">
+            <input type="text" id="search" placeholder="Search videos...">
+          </div>
+          <div class="filter-container">
+            <select id="filter">
+              <option value="all">All Videos</option>
+              <option value="recent">Recently Liked</option>
+              <option value="oldest">Oldest First</option>
+              <option value="popular">Most Popular</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div id="videos-container">
+        <div id="loading">Loading your videos...</div>
+        <div id="no-videos" style="display: none;">No liked videos found. Try fetching videos first.</div>
+        <div id="video-list"></div>
+      </div>
+
+      <!-- Load more button position here -->
+      <div class="load-more-container">
+        <!-- Load more button will be dynamically inserted here -->
+      </div>
+    </main>
+    
+    <!-- Sticky bottom bar -->
+    <div id="bottom-bar" class="sticky-bottom-bar">
+      <div class="selection-info">
+        <span id="selection-count">0 videos selected</span>
+      </div>
+      <div class="bulk-actions">
+        <button id="select-all" class="secondary-button">Select All</button>
+        <button id="delete-selected" class="danger-button" disabled>Delete Selected</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirmation-modal" class="modal">
+    <div class="modal-content">
+      <h3>Confirm Deletion</h3>
+      <p>Are you sure you want to remove these videos from your liked videos? This action cannot be undone.</p>
+      <div class="modal-actions">
+        <button id="cancel-delete" class="secondary-button">Cancel</button>
+        <button id="confirm-delete" class="danger-button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
