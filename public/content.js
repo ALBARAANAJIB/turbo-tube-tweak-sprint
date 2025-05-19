@@ -2,9 +2,53 @@
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'showToast') {
     showToast(message.message, message.count || 0);
+  } else if (message.action === 'displaySummary') {
+    displaySummary(message.summary);
+  } else if (message.action === 'summaryError') {
+    displaySummaryError(message.error);
   }
   return true;
 });
+
+// Display the summary in the panel
+function displaySummary(summary) {
+  const summaryContent = document.getElementById('youtube-enhancer-summary-content');
+  const loadingIndicator = document.getElementById('youtube-enhancer-loading');
+  
+  if (loadingIndicator) {
+    loadingIndicator.style.display = 'none';
+  }
+  
+  if (summaryContent) {
+    summaryContent.style.display = 'block';
+    summaryContent.innerHTML = `
+      <h3 style="font-size: 16px; font-weight: 500; margin-bottom: 12px;">Video Summary</h3>
+      <div style="font-size: 14px; line-height: 1.5; color: #0f0f0f;">${summary}</div>
+    `;
+  }
+}
+
+// Display error message in the panel
+function displaySummaryError(error) {
+  const summaryContent = document.getElementById('youtube-enhancer-summary-content');
+  const loadingIndicator = document.getElementById('youtube-enhancer-loading');
+  
+  if (loadingIndicator) {
+    loadingIndicator.style.display = 'none';
+  }
+  
+  if (summaryContent) {
+    summaryContent.style.display = 'block';
+    summaryContent.innerHTML = `
+      <div style="color: #c00; font-size: 14px;">
+        <p>Could not generate summary.</p>
+        <p style="margin-top: 8px; font-size: 13px; color: #606060;">
+          ${error || 'Unknown error occurred. Please try again.'}
+        </p>
+      </div>
+    `;
+  }
+}
 
 // Create and show a toast notification
 function showToast(message, count) {
@@ -352,7 +396,7 @@ function injectSummaryPanel() {
   // Create the AI icon
   const aiIcon = document.createElement('div');
   aiIcon.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sparkles">
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path>
       <path d="M5 3v4"></path>
       <path d="M19 17v4"></path>
@@ -532,49 +576,115 @@ function injectSummaryPanel() {
   loadingIndicator.appendChild(spinner);
   loadingIndicator.appendChild(spinnerText);
   
-  // Add click event to the summarize button
+  // Add click event to the summarize button with improved error handling
   summaryButton.addEventListener('click', () => {
-    // Get current video ID
+    // Get current video ID and title
     const videoId = new URLSearchParams(window.location.search).get('v');
     if (!videoId) {
       console.error('Could not find video ID');
+      displaySummaryError('Could not determine video ID');
       return;
     }
+    
+    // Get video title and channel if available
+    const videoTitle = document.title.replace(' - YouTube', '');
+    const channelElement = document.querySelector('#top-row ytd-channel-name yt-formatted-string a');
+    const channelTitle = channelElement ? channelElement.textContent : 'Unknown Channel';
     
     // Show loading state
     loadingIndicator.style.display = 'flex';
     summaryContent.style.display = 'none';
     
-    // Send message to background script to get summary
-    chrome.runtime.sendMessage({ 
-      action: 'summarizeVideo',
-      videoId: videoId,
-      videoTitle: document.title.replace(' - YouTube', '')
-    }, (response) => {
-      // Hide loading indicator
-      loadingIndicator.style.display = 'none';
+    // Check if we already have a cached summary
+    chrome.storage.local.get(['videoSummaries', 'aiApiKey'], (result) => {
+      const summaries = result.videoSummaries || {};
+      const apiKey = result.aiApiKey;
       
-      // Show summary content
-      summaryContent.style.display = 'block';
-      
-      if (response && response.success) {
-        // Format and display the summary
-        const summary = response.summary;
-        summaryContent.innerHTML = `
-          <h3 style="font-size: 16px; font-weight: 500; margin-bottom: 12px;">Video Summary</h3>
-          <div style="font-size: 14px; line-height: 1.5; color: #0f0f0f;">${summary}</div>
-        `;
-      } else {
-        // Show error message
+      if (!apiKey) {
+        loadingIndicator.style.display = 'none';
+        summaryContent.style.display = 'block';
         summaryContent.innerHTML = `
           <div style="color: #c00; font-size: 14px;">
-            <p>Could not generate summary. Please check your API key in the extension settings.</p>
-            <p style="margin-top: 8px; font-size: 13px; color: #606060;">
-              ${response?.error || 'Unknown error occurred'}
-            </p>
+            <p>API key is missing. Please set your Gemini API key in the extension settings.</p>
+            <button id="open-settings-btn" style="
+              background-color: #9b87f5;
+              color: white;
+              border: none;
+              border-radius: 4px;
+              padding: 8px 16px;
+              margin-top: 12px;
+              font-size: 14px;
+              cursor: pointer;
+            ">Open Settings</button>
           </div>
         `;
+        
+        // Add click event to open settings
+        document.getElementById('open-settings-btn').addEventListener('click', () => {
+          chrome.runtime.sendMessage({ action: 'openDashboard' });
+        });
+        return;
       }
+      
+      // Check if we have a cached summary that's less than 24 hours old
+      const cachedData = summaries[videoId];
+      if (cachedData && cachedData.summary) {
+        const cachedTime = new Date(cachedData.timestamp).getTime();
+        const currentTime = new Date().getTime();
+        const hoursDiff = (currentTime - cachedTime) / (1000 * 60 * 60);
+        
+        if (hoursDiff < 24) {
+          // Use cached summary
+          console.log('Using cached summary');
+          loadingIndicator.style.display = 'none';
+          displaySummary(cachedData.summary);
+          return;
+        }
+      }
+      
+      // Send message to background script with a timeout to handle potential hanging requests
+      const timeoutDuration = 45000; // 45 seconds
+      let hasResponded = false;
+      
+      // Set timeout to handle cases where the message response never comes back
+      const timeoutId = setTimeout(() => {
+        if (!hasResponded) {
+          hasResponded = true;
+          loadingIndicator.style.display = 'none';
+          displaySummaryError('Request timed out. Please try again.');
+        }
+      }, timeoutDuration);
+      
+      // Send message to background script
+      chrome.runtime.sendMessage({ 
+        action: 'summarizeVideo',
+        videoId: videoId,
+        videoTitle: videoTitle,
+        channelTitle: channelTitle
+      }, (response) => {
+        // Clear the timeout since we got a response
+        clearTimeout(timeoutId);
+        
+        // Only process if we haven't already handled this response
+        if (!hasResponded) {
+          hasResponded = true;
+          
+          if (chrome.runtime.lastError) {
+            console.error('Error in chrome.runtime.sendMessage:', chrome.runtime.lastError);
+            loadingIndicator.style.display = 'none';
+            displaySummaryError('Communication error. Please try again.');
+            return;
+          }
+          
+          if (response && response.success) {
+            // Format and display the summary
+            displaySummary(response.summary);
+          } else {
+            // Show error message
+            displaySummaryError(response?.error || 'Failed to generate summary. Please check your API key.');
+          }
+        }
+      });
     });
   });
   

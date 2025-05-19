@@ -15,7 +15,7 @@ export function Toaster() {
 
   return (
     <ToastProvider>
-      <AnimatePresence>
+      <AnimatePresence mode="sync">
         {toasts.map(function ({ id, title, description, action, ...props }) {
           return (
             <motion.div
@@ -28,7 +28,7 @@ export function Toaster() {
                 ease: "easeInOut"
               }}
             >
-              <Toast {...props}>
+              <Toast key={id} {...props}>
                 <div className="grid gap-1">
                   {title && <ToastTitle>{title}</ToastTitle>}
                   {description && (

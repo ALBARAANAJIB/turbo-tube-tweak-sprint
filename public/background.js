@@ -1,3 +1,7 @@
+<think>
+
+</think>
+
 // OAuth 2.0 constants
 const CLIENT_ID = '304162096302-c470kd77du16s0lrlumobc6s8u6uleng.apps.googleusercontent.com';
 const REDIRECT_URL = chrome.identity.getRedirectURL();
@@ -402,62 +406,120 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // Handle video summarization with Google Gemini API
   if (request.action === 'summarizeVideo') {
+    console.log('Starting video summarization process', request);
+    
+    // Important: Make sure to use return true to keep the message channel open
     (async () => {
       try {
-        // Get API key for the AI service
-        const apiKey = await getAiApiKey();
+        // Get API key for the Gemini service
+        const result = await chrome.storage.local.get(['aiApiKey', 'aiModel']);
+        const apiKey = result.aiApiKey;
+        const aiModel = result.aiModel || 'standard';
         
         if (!apiKey) {
-          // No API key found, prompt the user to enter one
-          chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-            if (tabs.length > 0) {
-              chrome.tabs.sendMessage(tabs[0].id, {
-                action: 'promptForApiKey',
-                service: 'Gemini'
-              });
-            }
-          });
-          
+          console.log('No API key found');
           sendResponse({ 
             success: false, 
-            error: 'No API key found. Please enter your Gemini API key.' 
+            error: 'API key is missing. Please set your Gemini API key in the extension settings.'
           });
           return;
         }
         
-        console.log('Starting video summarization process with Gemini API');
+        console.log('Using Gemini API to generate summary');
         
-        // Get video transcript if available
-        const transcript = await getVideoTranscript(request.videoId);
+        // Create a simple test request to verify API key works
+        const channelTitle = request.channelTitle || 'Unknown Creator';
+        const videoTitle = request.videoTitle || 'Unknown Video';
         
-        // Send video info to Gemini for summarization
-        const summary = await generateGeminiSummary(
-          transcript || request.videoTitle,
-          request.videoTitle,
-          request.channelTitle,
-          apiKey
-        );
-        
-        // Store the summary in local storage
-        await storeVideoSummary(request.videoId, summary);
-        
-        // Send the summary back to the content script
-        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-          if (tabs.length > 0) {
-            chrome.tabs.sendMessage(tabs[0].id, {
-              action: 'displaySummary',
-              summary: summary
-            });
+        // Format our request body according to Gemini API documentation
+        const requestBody = {
+          contents: [
+            {
+              parts: [
+                {
+                  text: `Please summarize this YouTube video titled "${videoTitle}" by ${channelTitle} in a clear, concise format using bullet points. 
+                  Include 3-5 main takeaways and any key insights. Make the summary easily scannable and informative. 
+                  Format your response in HTML with bullet points using <ul> and <li> tags.`
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 800,
+            topP: 0.8,
+            topK: 40
           }
+        };
+
+        console.log('Sending request to Gemini API');
+        
+        // The Gemini API endpoint with the API key as a query parameter
+        const endpoint = `${GEMINI_API_URL}?key=${apiKey}`;
+        
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
         });
         
-        sendResponse({ success: true, summary: summary });
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Gemini API error response:', response.status, errorText);
+          
+          // Handle specific error codes
+          let errorMessage = 'Failed to generate summary.';
+          if (response.status === 400) {
+            errorMessage = 'Invalid request to Gemini API. Please check your input.';
+          } else if (response.status === 403) {
+            errorMessage = 'API key unauthorized or quota exceeded. Please verify your Gemini API key is valid.';
+          } else if (response.status === 429) {
+            errorMessage = 'Gemini API rate limit exceeded. Please try again later.';
+          } else {
+            errorMessage = `Gemini API Error (${response.status}): ${errorText}`;
+          }
+          
+          console.error(errorMessage);
+          sendResponse({ 
+            success: false, 
+            error: errorMessage
+          });
+          return;
+        }
+        
+        const result = await response.json();
+        console.log('Gemini API response:', result);
+        
+        // Extract the summary text from the Gemini response
+        if (result.candidates && result.candidates.length > 0 && 
+            result.candidates[0].content && 
+            result.candidates[0].content.parts && 
+            result.candidates[0].content.parts.length > 0) {
+            
+          const summary = result.candidates[0].content.parts[0].text;
+          
+          // Store the summary in local storage
+          await storeVideoSummary(request.videoId, summary);
+          
+          // Send the summary back to the content script
+          sendResponse({ 
+            success: true, 
+            summary: summary
+          });
+        } else {
+          console.error('Invalid response format from Gemini API');
+          sendResponse({ 
+            success: false, 
+            error: 'Invalid response format from Gemini API'
+          });
+        }
       } catch (error) {
         console.error('Error summarizing video:', error);
         sendResponse({ 
           success: false, 
-          error: `Failed to summarize video: ${error.message}`,
-          errorDetails: error
+          error: `Failed to generate summary: ${error.message}`
         });
       }
     })();
@@ -549,89 +611,12 @@ async function getUserInfo(token) {
   }
 }
 
-// Get saved AI API key
-async function getAiApiKey() {
-  const result = await chrome.storage.local.get('aiApiKey');
-  return result.aiApiKey || null;
-}
-
 // Get video transcript (if available)
 async function getVideoTranscript(videoId) {
   // This is a placeholder function. In a real implementation,
   // you would use YouTube's captions API or another service to get the transcript.
   // This requires additional permissions and potentially a server component.
   return null;
-}
-
-// Generate video summary using Google's Gemini API
-async function generateGeminiSummary(text, title, channelTitle, apiKey) {
-  try {
-    console.log('Generating summary using Gemini API');
-    
-    // Format our request body according to Gemini API documentation
-    const requestBody = {
-      contents: [
-        {
-          parts: [
-            {
-              text: `Please summarize this YouTube video titled "${title}" by ${channelTitle} in a clear, concise format using bullet points. 
-              Include 3-5 main takeaways and any key insights. Make the summary easily scannable and informative.
-              ${text ? 'Here is the content to summarize: ' + text : 'No transcript available, summarize based on the title.'}`
-            }
-          ]
-        }
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 800,
-        topP: 0.8,
-        topK: 40
-      }
-    };
-
-    // The Gemini API endpoint with the API key as a query parameter
-    const endpoint = `${GEMINI_API_URL}?key=${apiKey}`;
-    
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(requestBody)
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('Gemini API error response:', errorData);
-      
-      // Handle specific error codes
-      if (response.status === 400) {
-        throw new Error('Invalid request to Gemini API. Please check your input.');
-      } else if (response.status === 403) {
-        throw new Error('API key unauthorized. Please verify your Gemini API key is valid.');
-      } else if (response.status === 429) {
-        throw new Error('Gemini API rate limit exceeded. Please try again later.');
-      } else {
-        throw new Error(`Gemini API Error: ${errorData.error?.message || 'Unknown error'}`);
-      }
-    }
-    
-    const result = await response.json();
-    console.log('Gemini API response:', result);
-    
-    // Extract the summary text from the Gemini response
-    if (result.candidates && result.candidates.length > 0 && 
-        result.candidates[0].content && 
-        result.candidates[0].content.parts && 
-        result.candidates[0].content.parts.length > 0) {
-      return result.candidates[0].content.parts[0].text;
-    } else {
-      throw new Error('Invalid response format from Gemini API');
-    }
-  } catch (error) {
-    console.error('Error generating summary with Gemini:', error);
-    throw new Error(`Failed to generate summary: ${error.message}`);
-  }
 }
 
 // Store video summary in local storage
