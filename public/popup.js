@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Login with YouTube
-  loginButton.addEventListener('click', () => {
+  loginButton && loginButton.addEventListener('click', () => {
     loginButton.disabled = true;
     loginButton.textContent = 'Signing in...';
     
@@ -105,11 +105,20 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // AI Summary - Now directly opens the dashboard with AI tab active
+  // AI Summary - Direct access to YouTube videos' summaries
   aiSummaryButton && aiSummaryButton.addEventListener('click', () => {
-    // Open dashboard with AI tab active
-    chrome.tabs.create({ 
-      url: chrome.runtime.getURL('dashboard.html?tab=ai') 
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const currentTab = tabs[0];
+      if (currentTab && currentTab.url && currentTab.url.includes('youtube.com/watch')) {
+        // We're on a YouTube video page, so we can directly trigger the summary
+        chrome.tabs.sendMessage(currentTab.id, { action: 'triggerSummary' });
+        window.close(); // Close the popup
+      } else {
+        // Not on a YouTube video, open dashboard with AI tab
+        chrome.tabs.create({ 
+          url: chrome.runtime.getURL('dashboard.html?tab=ai') 
+        });
+      }
     });
   });
 

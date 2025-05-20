@@ -6,6 +6,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     displaySummary(message.summary);
   } else if (message.action === 'summaryError') {
     displaySummaryError(message.error);
+  } else if (message.action === 'showSummaryLoading') {
+    showSummaryLoading(message.message || 'Fetching transcript and generating summary...');
   }
   return true;
 });
@@ -47,6 +49,25 @@ function displaySummaryError(error) {
         </p>
       </div>
     `;
+  }
+}
+
+// Show loading message with progress information
+function showSummaryLoading(message) {
+  const loadingIndicator = document.getElementById('youtube-enhancer-loading');
+  const summaryContent = document.getElementById('youtube-enhancer-summary-content');
+  
+  if (summaryContent) {
+    summaryContent.style.display = 'none';
+  }
+  
+  if (loadingIndicator) {
+    loadingIndicator.style.display = 'flex';
+    // Update the text content
+    const spinnerText = loadingIndicator.querySelector('div:not(:first-child)');
+    if (spinnerText) {
+      spinnerText.textContent = message;
+    }
   }
 }
 
@@ -473,8 +494,8 @@ function injectSummaryPanel() {
   const summaryButton = document.createElement('button');
   summaryButton.textContent = 'Summarize Video';
   summaryButton.style.cssText = `
-    background-color: #f1f1f1;
-    color: #0f0f0f;
+    background-color: #9b87f5;
+    color: white;
     border: none;
     border-radius: 18px;
     padding: 0 16px;
@@ -493,11 +514,11 @@ function injectSummaryPanel() {
   
   // Add hover effects to the button
   summaryButton.addEventListener('mouseenter', () => {
-    summaryButton.style.backgroundColor = '#e5e5e5';
+    summaryButton.style.backgroundColor = '#8a74e8';
   });
   
   summaryButton.addEventListener('mouseleave', () => {
-    summaryButton.style.backgroundColor = '#f1f1f1';
+    summaryButton.style.backgroundColor = '#9b87f5';
   });
   
   // Add click effect
@@ -595,36 +616,12 @@ function injectSummaryPanel() {
     loadingIndicator.style.display = 'flex';
     summaryContent.style.display = 'none';
     
+    // First show initial loading state
+    showSummaryLoading('Fetching video transcript...');
+    
     // Check if we already have a cached summary
-    chrome.storage.local.get(['videoSummaries', 'aiApiKey'], (result) => {
+    chrome.storage.local.get(['videoSummaries'], (result) => {
       const summaries = result.videoSummaries || {};
-      const apiKey = result.aiApiKey;
-      
-      if (!apiKey) {
-        loadingIndicator.style.display = 'none';
-        summaryContent.style.display = 'block';
-        summaryContent.innerHTML = `
-          <div style="color: #c00; font-size: 14px;">
-            <p>API key is missing. Please set your Gemini API key in the extension settings.</p>
-            <button id="open-settings-btn" style="
-              background-color: #9b87f5;
-              color: white;
-              border: none;
-              border-radius: 4px;
-              padding: 8px 16px;
-              margin-top: 12px;
-              font-size: 14px;
-              cursor: pointer;
-            ">Open Settings</button>
-          </div>
-        `;
-        
-        // Add click event to open settings
-        document.getElementById('open-settings-btn').addEventListener('click', () => {
-          chrome.runtime.sendMessage({ action: 'openDashboard' });
-        });
-        return;
-      }
       
       // Check if we have a cached summary that's less than 24 hours old
       const cachedData = summaries[videoId];
@@ -636,24 +633,13 @@ function injectSummaryPanel() {
         if (hoursDiff < 24) {
           // Use cached summary
           console.log('Using cached summary');
-          loadingIndicator.style.display = 'none';
-          displaySummary(cachedData.summary);
+          showSummaryLoading('Loading cached summary...');
+          setTimeout(() => {
+            displaySummary(cachedData.summary);
+          }, 500); // Small delay for better UX
           return;
         }
       }
-      
-      // Send message to background script with a timeout to handle potential hanging requests
-      const timeoutDuration = 45000; // 45 seconds
-      let hasResponded = false;
-      
-      // Set timeout to handle cases where the message response never comes back
-      const timeoutId = setTimeout(() => {
-        if (!hasResponded) {
-          hasResponded = true;
-          loadingIndicator.style.display = 'none';
-          displaySummaryError('Request timed out. Please try again.');
-        }
-      }, timeoutDuration);
       
       // Send message to background script
       chrome.runtime.sendMessage({ 
@@ -662,27 +648,18 @@ function injectSummaryPanel() {
         videoTitle: videoTitle,
         channelTitle: channelTitle
       }, (response) => {
-        // Clear the timeout since we got a response
-        clearTimeout(timeoutId);
+        if (chrome.runtime.lastError) {
+          console.error('Error in chrome.runtime.sendMessage:', chrome.runtime.lastError);
+          displaySummaryError('Communication error with extension. Please try again.');
+          return;
+        }
         
-        // Only process if we haven't already handled this response
-        if (!hasResponded) {
-          hasResponded = true;
-          
-          if (chrome.runtime.lastError) {
-            console.error('Error in chrome.runtime.sendMessage:', chrome.runtime.lastError);
-            loadingIndicator.style.display = 'none';
-            displaySummaryError('Communication error. Please try again.');
-            return;
-          }
-          
-          if (response && response.success) {
-            // Format and display the summary
-            displaySummary(response.summary);
-          } else {
-            // Show error message
-            displaySummaryError(response?.error || 'Failed to generate summary. Please check your API key.');
-          }
+        if (response && response.success) {
+          // Format and display the summary
+          displaySummary(response.summary);
+        } else {
+          // Show error message
+          displaySummaryError(response?.error || 'Failed to generate summary. Please try again later.');
         }
       });
     });
