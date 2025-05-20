@@ -107,11 +107,11 @@ const Index = () => {
 
   const handleSaveApiKey = () => {
     if (window.chrome?.runtime) {
-      // Check if API key looks valid (simple check)
-      if (!apiKey || apiKey.length < 10) {
+      // Simplified validation - we'll just make sure something was entered
+      if (!apiKey || apiKey.trim() === '') {
         toast({
-          title: "Invalid API Key",
-          description: "Please enter a valid Gemini API key.",
+          title: "API Key Required",
+          description: "Please enter your API key.",
           variant: "destructive",
         });
         return;
@@ -124,7 +124,7 @@ const Index = () => {
         if (response && response.success) {
           toast({
             title: "API Key Saved",
-            description: "Your Gemini API key has been saved.",
+            description: "Your API key has been saved successfully.",
           });
           setShowApiKeyForm(false);
         } else {
@@ -173,55 +173,6 @@ const Index = () => {
         });
       });
     }
-  };
-
-  // Test the Gemini API
-  const handleTestGeminiApi = () => {
-    if (!apiKey) {
-      toast({
-        title: "API Key Required",
-        description: "Please enter your Gemini API key first.",
-        variant: "destructive",
-      });
-      return;
-    }
-    
-    toast({
-      title: "Testing API Key",
-      description: "Checking your Gemini API key...",
-    });
-    
-    // Create a simple test request to verify API key works
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
-    const requestBody = {
-      contents: [{ parts: [{ text: "Hello, can you provide a short test response?" }] }]
-    };
-    
-    fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    })
-    .then(response => {
-      if (!response.ok) {
-        throw new Error(`API test failed with status: ${response.status}`);
-      }
-      return response.json();
-    })
-    .then(data => {
-      toast({
-        title: "API Key Valid",
-        description: "Your Gemini API key is working correctly.",
-      });
-    })
-    .catch(error => {
-      console.error("API test error:", error);
-      toast({
-        title: "API Key Invalid",
-        description: "Your Gemini API key appears to be invalid or restricted.",
-        variant: "destructive",
-      });
-    });
   };
 
   if (isLoading) {
@@ -273,33 +224,24 @@ const Index = () => {
                 <div className="mb-6 p-4 bg-blue-50 rounded-lg">
                   <h3 className="text-lg font-medium text-blue-800 mb-2">AI Summary Setup</h3>
                   <p className="text-sm text-blue-600 mb-4">
-                    To use the AI summary feature, please enter your Google Gemini API key. 
-                    You can get one from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="underline">Google AI Studio</a>.
+                    To use the AI video summary feature, please enter your API key from 
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="underline ml-1">Google AI Studio</a>.
                   </p>
                   <div className="flex flex-col space-y-2">
                     <input 
                       type="text" 
-                      placeholder="Enter your Gemini API key"
+                      placeholder="Enter your API key"
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
                       className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
-                    <div className="flex gap-2">
-                      <Button 
-                        onClick={handleSaveApiKey}
-                        disabled={!apiKey}
-                        className="w-full"
-                      >
-                        Save API Key
-                      </Button>
-                      <Button
-                        onClick={handleTestGeminiApi}
-                        disabled={!apiKey}
-                        variant="outline"
-                      >
-                        Test Key
-                      </Button>
-                    </div>
+                    <Button 
+                      onClick={handleSaveApiKey}
+                      disabled={!apiKey}
+                      className="w-full"
+                    >
+                      Save API Key
+                    </Button>
                   </div>
                 </div>
               )}
@@ -354,18 +296,18 @@ const Index = () => {
                         <MessageSquareText className="h-5 w-5 text-white" />
                       </div>
                       <div>
-                        <h3 className="text-lg font-medium text-gray-900 mb-1">AI Video Summaries</h3>
+                        <h3 className="text-lg font-medium text-gray-900 mb-1">Smart Video Summaries</h3>
                         <p className="text-sm text-gray-600 mb-4">
-                          Get instant AI-generated summaries of any YouTube video you're watching with Google Gemini.
+                          Get instant AI-generated summaries of any YouTube video using advanced transcript analysis.
                           {!apiKey && " You'll need to set up your API key first."}
                         </p>
                         <p className="text-xs text-gray-500 mb-4">
-                          This feature adds a "Summarize Video" button to your YouTube video page and provides bullet-point summaries.
+                          This feature adds a "Summarize Video" button to YouTube video pages and provides intelligent bullet-point summaries.
                         </p>
                         
                         {apiKey && (
                           <div className="mb-4">
-                            <p className="text-sm font-medium text-gray-700 mb-2">Choose model quality:</p>
+                            <p className="text-sm font-medium text-gray-700 mb-2">Choose summarization mode:</p>
                             <div className="grid grid-cols-2 gap-2">
                               <Button
                                 variant={aiModel === "standard" ? "default" : "outline"} 

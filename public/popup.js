@@ -215,7 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Add dialog title
     const title = document.createElement('h3');
-    title.textContent = 'Set Gemini API Key';
+    title.textContent = 'Set API Key';
     title.style.cssText = `
       font-size: 18px;
       margin: 0 0 16px 0;
@@ -225,7 +225,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add dialog description
     const description = document.createElement('p');
     description.innerHTML = `
-      To use the AI summary feature, please enter your Google Gemini API key. 
+      To use the video summary feature, please enter your API key. 
       You can get one from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>.
     `;
     description.style.cssText = `
@@ -237,7 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add API key input
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Enter your Gemini API key';
+    input.placeholder = 'Enter your API key';
     input.style.cssText = `
       width: 100%;
       padding: 8px;
@@ -281,20 +281,6 @@ document.addEventListener('DOMContentLoaded', () => {
       color: white;
     `;
     
-    // Add test button
-    const testButton = document.createElement('button');
-    testButton.textContent = 'Test Key';
-    testButton.style.cssText = `
-      padding: 8px 16px;
-      border: none;
-      border-radius: 4px;
-      font-size: 14px;
-      cursor: pointer;
-      background-color: #4CAF50;
-      color: white;
-      margin-right: auto;
-    `;
-    
     // Add status message element
     const statusMessage = document.createElement('div');
     statusMessage.style.cssText = `
@@ -333,55 +319,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
     
-    // Add click event to test button
-    testButton.addEventListener('click', () => {
-      const apiKey = input.value.trim();
-      if (!apiKey) {
-        statusMessage.textContent = 'Please enter an API key to test';
-        statusMessage.style.color = '#ff3333';
-        statusMessage.style.display = 'block';
-        return;
-      }
-      
-      // Show testing status
-      statusMessage.textContent = 'Testing API key...';
-      statusMessage.style.color = '#606060';
-      statusMessage.style.display = 'block';
-      testButton.disabled = true;
-      
-      // Test API key with a simple request
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
-      const requestBody = {
-        contents: [{ parts: [{ text: "Hello, can you provide a short test response?" }] }]
-      };
-      
-      fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`API test failed with status: ${response.status}`);
-        }
-        return response.json();
-      })
-      .then(data => {
-        statusMessage.textContent = 'API key is valid!';
-        statusMessage.style.color = '#4CAF50';
-      })
-      .catch(error => {
-        console.error("API test error:", error);
-        statusMessage.textContent = 'Invalid API key. Please check and try again.';
-        statusMessage.style.color = '#ff3333';
-      })
-      .finally(() => {
-        testButton.disabled = false;
-      });
-    });
-    
     // Assemble dialog
-    buttons.appendChild(testButton);
     buttons.appendChild(cancelButton);
     buttons.appendChild(saveButton);
     

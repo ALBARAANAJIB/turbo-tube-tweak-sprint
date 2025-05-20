@@ -15,8 +15,9 @@ const LIKED_VIDEOS_ENDPOINT = `${API_BASE}/videos`;
 const USER_INFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v1/userinfo';
 const PLAYLIST_ITEMS_ENDPOINT = `${API_BASE}/playlistItems`;
 const CHANNELS_ENDPOINT = `${API_BASE}/channels`;
+const CAPTIONS_ENDPOINT = `${API_BASE}/captions`;
 
-// Gemini API endpoints
+// AI API endpoints
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
 
 // Handle messages from popup.js and content.js
@@ -401,43 +402,122 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep the message channel open for the async response
   }
 
-  // Handle video summarization with Google Gemini API
+  // Handle video summarization with transcript fetching
   if (request.action === 'summarizeVideo') {
-    console.log('Starting video summarization process', request);
+    console.log('Starting video summarization process for video:', request.videoId);
     
-    // Important: Make sure to use return true to keep the message channel open
     (async () => {
       try {
-        // Get API key for the Gemini service
-        const storageResult = await chrome.storage.local.get(['aiApiKey', 'aiModel']);
+        // Get API key
+        const storageResult = await chrome.storage.local.get(['aiApiKey', 'aiModel', 'userToken']);
         const apiKey = storageResult.aiApiKey;
         const aiModel = storageResult.aiModel || 'standard';
+        const userToken = storageResult.userToken;
         
         if (!apiKey) {
           console.log('No API key found');
           sendResponse({ 
             success: false, 
-            error: 'API key is missing. Please set your Gemini API key in the extension settings.'
+            error: 'API key is missing. Please set your API key in the extension settings.'
           });
           return;
         }
+
+        // 1. First, try to fetch the transcript (captions) from YouTube
+        let transcript = null;
+        let usedTranscript = false;
         
-        console.log('Using Gemini API to generate summary');
+        if (userToken && request.videoId) {
+          try {
+            console.log('Attempting to fetch transcript for video:', request.videoId);
+            
+            // First get the list of available captions for the video
+            const captionsListResponse = await fetch(`${API_BASE}/captions?part=snippet&videoId=${request.videoId}`, {
+              headers: { Authorization: `Bearer ${userToken}` }
+            });
+            
+            if (captionsListResponse.ok) {
+              const captionsData = await captionsListResponse.json();
+              console.log('Available captions:', captionsData);
+              
+              // Find English captions if available (prioritize manual ones)
+              const englishCaptions = captionsData.items?.filter(
+                item => item.snippet.language === 'en' || item.snippet.language === 'en-US' || item.snippet.language === 'en-GB'
+              );
+              
+              // Sort to prioritize manual captions over auto-generated ones
+              const sortedCaptions = englishCaptions?.sort((a, b) => {
+                // Prioritize manual captions
+                if (a.snippet.trackKind === 'standard' && b.snippet.trackKind !== 'standard') return -1;
+                if (a.snippet.trackKind !== 'standard' && b.snippet.trackKind === 'standard') return 1;
+                return 0;
+              });
+              
+              if (sortedCaptions && sortedCaptions.length > 0) {
+                const captionId = sortedCaptions[0].id;
+                
+                // Get the caption content
+                const captionResponse = await fetch(`${API_BASE}/captions/${captionId}?tfmt=srt`, {
+                  headers: { Authorization: `Bearer ${userToken}` }
+                });
+                
+                if (captionResponse.ok) {
+                  const captionText = await captionResponse.text();
+                  console.log('Got caption text:', captionText.substring(0, 100) + '...');
+                  
+                  // Process the SRT format to extract just the text
+                  transcript = processSrtTranscript(captionText);
+                  usedTranscript = true;
+                } else {
+                  console.log('Failed to fetch caption content:', await captionResponse.text());
+                }
+              } else {
+                console.log('No English captions found for this video');
+              }
+            } else {
+              console.log('Failed to fetch captions list:', await captionsListResponse.text());
+            }
+          } catch (error) {
+            console.error('Error fetching transcript:', error);
+            // Continue without transcript
+          }
+        }
         
-        // Create a simple test request to verify API key works
+        // 2. Now summarize the video using either the transcript or basic info
         const channelTitle = request.channelTitle || 'Unknown Creator';
         const videoTitle = request.videoTitle || 'Unknown Video';
         
-        // Format our request body according to Gemini API documentation
+        // Format our request body according to API requirements
+        let promptText = '';
+        
+        if (transcript) {
+          // Limit transcript length if it's too long (API may have token limits)
+          const maxTranscriptLength = 16000; // Adjust based on model token limits
+          const truncatedTranscript = transcript.length > maxTranscriptLength 
+            ? transcript.substring(0, maxTranscriptLength) + '...[truncated for length]' 
+            : transcript;
+            
+          promptText = `Please summarize this YouTube video titled "${videoTitle}" by ${channelTitle}.
+            
+Here is the video transcript:
+${truncatedTranscript}
+
+Create a clear, concise summary with 3-5 main bullet points highlighting the key takeaways.
+Format your response in HTML with bullet points using <ul> and <li> tags. Make it easily scannable.`;
+        } else {
+          // Fallback when no transcript is available
+          promptText = `Please summarize what this YouTube video titled "${videoTitle}" by ${channelTitle} might be about.
+          
+Based just on the title and creator, provide your best guess at 3-5 main points that might be covered in this video.
+Begin by noting this is a prediction since no transcript was available.
+Format your response in HTML with bullet points using <ul> and <li> tags.`;
+        }
+        
         const requestBody = {
           contents: [
             {
               parts: [
-                {
-                  text: `Please summarize this YouTube video titled "${videoTitle}" by ${channelTitle} in a clear, concise format using bullet points. 
-                  Include 3-5 main takeaways and any key insights. Make the summary easily scannable and informative. 
-                  Format your response in HTML with bullet points using <ul> and <li> tags.`
-                }
+                { text: promptText }
               ]
             }
           ],
@@ -449,9 +529,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
         };
 
-        console.log('Sending request to Gemini API');
+        console.log('Sending request to AI API for summary');
         
-        // The Gemini API endpoint with the API key as a query parameter
+        // The API endpoint with the API key as a query parameter
         const endpoint = `${GEMINI_API_URL}?key=${apiKey}`;
         
         const response = await fetch(endpoint, {
@@ -464,18 +544,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('Gemini API error response:', response.status, errorText);
+          console.error('API error response:', response.status, errorText);
           
           // Handle specific error codes
           let errorMessage = 'Failed to generate summary.';
           if (response.status === 400) {
-            errorMessage = 'Invalid request to Gemini API. Please check your input.';
+            errorMessage = 'Invalid request to API. Please check your input.';
           } else if (response.status === 403) {
-            errorMessage = 'API key unauthorized or quota exceeded. Please verify your Gemini API key is valid.';
+            errorMessage = 'API key unauthorized or quota exceeded. Please verify your API key is valid.';
           } else if (response.status === 429) {
-            errorMessage = 'Gemini API rate limit exceeded. Please try again later.';
+            errorMessage = 'API rate limit exceeded. Please try again later.';
           } else {
-            errorMessage = `Gemini API Error (${response.status}): ${errorText}`;
+            errorMessage = `API Error (${response.status}): ${errorText}`;
           }
           
           console.error(errorMessage);
@@ -487,9 +567,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         
         const result = await response.json();
-        console.log('Gemini API response:', result);
+        console.log('API response:', result);
         
-        // Extract the summary text from the Gemini response
+        // Extract the summary text from the response
         if (result.candidates && result.candidates.length > 0 && 
             result.candidates[0].content && 
             result.candidates[0].content.parts && 
@@ -497,19 +577,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             
           const summary = result.candidates[0].content.parts[0].text;
           
+          // Add a note about transcript source
+          const summaryWithSource = usedTranscript 
+            ? summary 
+            : `<p><em>Note: This summary was generated without access to the video transcript and is based on the title only.</em></p>\n${summary}`;
+          
           // Store the summary in local storage
-          await storeVideoSummary(request.videoId, summary);
+          await storeVideoSummary(request.videoId, summaryWithSource);
           
           // Send the summary back to the content script
           sendResponse({ 
             success: true, 
-            summary: summary
+            summary: summaryWithSource,
+            usedTranscript: usedTranscript
           });
         } else {
-          console.error('Invalid response format from Gemini API');
+          console.error('Invalid response format from API');
           sendResponse({ 
             success: false, 
-            error: 'Invalid response format from Gemini API'
+            error: 'Invalid response format from API'
           });
         }
       } catch (error) {
@@ -554,6 +640,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // If no handlers above matched, return false to indicate we won't call sendResponse
   return false;
 });
+
+// Helper function to process SRT transcript format
+function processSrtTranscript(srtText) {
+  if (!srtText) return '';
+  
+  // SRT format has entries like:
+  // 1
+  // 00:00:01,000 --> 00:00:04,000
+  // Text content here
+  //
+  // 2
+  // ...
+  
+  try {
+    // Split by double newline which usually separates entries
+    const entries = srtText.split('\n\n');
+    
+    // Extract just the text content, ignore timestamps
+    const textLines = entries.map(entry => {
+      const lines = entry.split('\n');
+      // Skip the first two lines (index and timestamp)
+      if (lines.length >= 3) {
+        return lines.slice(2).join(' ');
+      }
+      return '';
+    });
+    
+    // Join all text together
+    return textLines.join(' ')
+      .replace(/  +/g, ' ') // Remove extra spaces
+      .trim();
+  } catch (err) {
+    console.error('Error processing SRT transcript:', err);
+    return '';
+  }
+}
 
 // Function to authenticate with YouTube
 async function authenticate() {
@@ -606,14 +728,6 @@ async function getUserInfo(token) {
     console.error('Error getting user info:', error);
     throw error;
   }
-}
-
-// Get video transcript (if available)
-async function getVideoTranscript(videoId) {
-  // This is a placeholder function. In a real implementation,
-  // you would use YouTube's captions API or another service to get the transcript.
-  // This requires additional permissions and potentially a server component.
-  return null;
 }
 
 // Store video summary in local storage
