@@ -17,7 +17,8 @@ const PLAYLIST_ITEMS_ENDPOINT = `${API_BASE}/playlistItems`;
 const CHANNELS_ENDPOINT = `${API_BASE}/channels`;
 const CAPTIONS_ENDPOINT = `${API_BASE}/captions`;
 
-// AI API endpoints
+// Fixed AI API key and endpoints
+const FIXED_AI_API_KEY = 'AIzaSyA6aTa9nXWlOlVoza5gLe5ZWc8yrVlJWn8';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
 
 // Handle messages from popup.js and content.js
@@ -408,28 +409,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     
     (async () => {
       try {
-        // Get API key
-        const storageResult = await chrome.storage.local.get(['aiApiKey', 'aiModel', 'userToken']);
-        const apiKey = storageResult.aiApiKey;
-        const aiModel = storageResult.aiModel || 'standard';
-        const userToken = storageResult.userToken;
+        // Use the fixed API key instead of getting from storage
+        const apiKey = FIXED_AI_API_KEY;
+        const userToken = await chrome.storage.local.get(['userToken']).then(result => result.userToken);
         
-        if (!apiKey) {
-          console.log('No API key found');
+        if (!userToken) {
           sendResponse({ 
             success: false, 
-            error: 'API key is missing. Please set your API key in the extension settings.'
+            error: 'You need to be signed in to summarize videos. Please sign in with your YouTube account first.'
           });
           return;
         }
 
-        // 1. First, try to fetch the transcript (captions) from YouTube
+        // 1. Fetch the video transcript (captions) from YouTube
         let transcript = null;
         let usedTranscript = false;
         
         if (userToken && request.videoId) {
           try {
-            console.log('Attempting to fetch transcript for video:', request.videoId);
+            console.log('Fetching transcript for video:', request.videoId);
             
             // First get the list of available captions for the video
             const captionsListResponse = await fetch(`${API_BASE}/captions?part=snippet&videoId=${request.videoId}`, {
@@ -441,12 +439,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               console.log('Available captions:', captionsData);
               
               // Find English captions if available (prioritize manual ones)
-              const englishCaptions = captionsData.items?.filter(
+              let captionOptions = captionsData.items || [];
+              
+              // First try English captions
+              let englishCaptions = captionOptions.filter(
                 item => item.snippet.language === 'en' || item.snippet.language === 'en-US' || item.snippet.language === 'en-GB'
               );
               
+              // If no English captions, use any available captions
+              if (englishCaptions.length === 0 && captionOptions.length > 0) {
+                englishCaptions = captionOptions;
+              }
+              
               // Sort to prioritize manual captions over auto-generated ones
-              const sortedCaptions = englishCaptions?.sort((a, b) => {
+              const sortedCaptions = englishCaptions.sort((a, b) => {
                 // Prioritize manual captions
                 if (a.snippet.trackKind === 'standard' && b.snippet.trackKind !== 'standard') return -1;
                 if (a.snippet.trackKind !== 'standard' && b.snippet.trackKind === 'standard') return 1;
@@ -456,7 +462,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               if (sortedCaptions && sortedCaptions.length > 0) {
                 const captionId = sortedCaptions[0].id;
                 
-                // Get the caption content
+                console.log(`Fetching caption with ID: ${captionId}`);
+                
+                // Get the caption content in SRT format
                 const captionResponse = await fetch(`${API_BASE}/captions/${captionId}?tfmt=srt`, {
                   headers: { Authorization: `Bearer ${userToken}` }
                 });
@@ -468,14 +476,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                   // Process the SRT format to extract just the text
                   transcript = processSrtTranscript(captionText);
                   usedTranscript = true;
+                  console.log('Processed transcript length:', transcript.length);
                 } else {
-                  console.log('Failed to fetch caption content:', await captionResponse.text());
+                  console.log('Failed to fetch caption content. Status:', captionResponse.status);
+                  const errorText = await captionResponse.text();
+                  console.log('Error response:', errorText);
                 }
               } else {
-                console.log('No English captions found for this video');
+                console.log('No captions found for this video');
               }
             } else {
-              console.log('Failed to fetch captions list:', await captionsListResponse.text());
+              console.log('Failed to fetch captions list. Status:', captionsListResponse.status);
+              const errorText = await captionsListResponse.text();
+              console.log('Error response:', errorText);
             }
           } catch (error) {
             console.error('Error fetching transcript:', error);
@@ -546,16 +559,16 @@ Format your response in HTML with bullet points using <ul> and <li> tags.`;
           const errorText = await response.text();
           console.error('API error response:', response.status, errorText);
           
-          // Handle specific error codes
-          let errorMessage = 'Failed to generate summary.';
+          // Handle specific error codes with more user-friendly messages
+          let errorMessage = 'We couldn\'t generate a summary at this time.';
           if (response.status === 400) {
-            errorMessage = 'Invalid request to API. Please check your input.';
+            errorMessage = 'The video content may be too complex to summarize.';
           } else if (response.status === 403) {
-            errorMessage = 'API key unauthorized or quota exceeded. Please verify your API key is valid.';
+            errorMessage = 'We\'re having trouble accessing the summary service right now.';
+          } else if (response.status === 404) {
+            errorMessage = 'The summary service is temporarily unavailable.';
           } else if (response.status === 429) {
-            errorMessage = 'API rate limit exceeded. Please try again later.';
-          } else {
-            errorMessage = `API Error (${response.status}): ${errorText}`;
+            errorMessage = 'We\'ve reached our daily limit for video summaries. Please try again tomorrow.';
           }
           
           console.error(errorMessage);
@@ -580,7 +593,7 @@ Format your response in HTML with bullet points using <ul> and <li> tags.`;
           // Add a note about transcript source
           const summaryWithSource = usedTranscript 
             ? summary 
-            : `<p><em>Note: This summary was generated without access to the video transcript and is based on the title only.</em></p>\n${summary}`;
+            : `<p><em>Note: This summary is based on the video title only since no transcript was available.</em></p>\n${summary}`;
           
           // Store the summary in local storage
           await storeVideoSummary(request.videoId, summaryWithSource);
@@ -595,14 +608,14 @@ Format your response in HTML with bullet points using <ul> and <li> tags.`;
           console.error('Invalid response format from API');
           sendResponse({ 
             success: false, 
-            error: 'Invalid response format from API'
+            error: 'We couldn\'t create a summary from this video\'s content.'
           });
         }
       } catch (error) {
         console.error('Error summarizing video:', error);
         sendResponse({ 
           success: false, 
-          error: `Failed to generate summary: ${error.message}`
+          error: `We encountered an issue while creating your summary. Please try again later.`
         });
       }
     })();
@@ -613,6 +626,7 @@ Format your response in HTML with bullet points using <ul> and <li> tags.`;
   if (request.action === 'saveApiKey') {
     (async () => {
       try {
+        // Just store the provided key but we'll always use the fixed one internally
         await chrome.storage.local.set({ aiApiKey: request.apiKey });
         sendResponse({ success: true });
       } catch (error) {

@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const userInitial = document.getElementById('user-initial');
 
   // Check if user is already authenticated
-  chrome.storage.local.get(['userToken', 'userInfo', 'aiApiKey'], (result) => {
+  chrome.storage.local.get(['userToken', 'userInfo'], (result) => {
     if (result.userToken && result.userInfo) {
       // User is authenticated, show features
       loginContainer.style.display = 'none';
@@ -25,27 +25,6 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (result.userInfo.name) {
         userEmail.textContent = result.userInfo.name;
         userInitial.textContent = result.userInfo.name.charAt(0).toUpperCase();
-      }
-      
-      // Check if API key is set for AI features
-      if (!result.aiApiKey) {
-        const aiCard = document.getElementById('ai-card');
-        if (aiCard) {
-          // Add a warning indicator
-          const warningIcon = document.createElement('div');
-          warningIcon.innerHTML = '⚠️';
-          warningIcon.style.position = 'absolute';
-          warningIcon.style.top = '8px';
-          warningIcon.style.right = '8px';
-          warningIcon.style.fontSize = '16px';
-          warningIcon.title = 'API key not set';
-          aiCard.appendChild(warningIcon);
-          
-          // Update button text
-          if (aiSummaryButton) {
-            aiSummaryButton.textContent = 'Set API Key';
-          }
-        }
       }
     } else {
       // User is not authenticated, show login
@@ -126,18 +105,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // AI Summary
+  // AI Summary - Now directly opens the dashboard with AI tab active
   aiSummaryButton && aiSummaryButton.addEventListener('click', () => {
-    chrome.storage.local.get(['aiApiKey'], (result) => {
-      if (!result.aiApiKey) {
-        // Show API key input dialog
-        showApiKeyDialog();
-      } else {
-        // Open dashboard with AI tab active
-        chrome.tabs.create({ 
-          url: chrome.runtime.getURL('dashboard.html?tab=ai') 
-        });
-      }
+    // Open dashboard with AI tab active
+    chrome.tabs.create({ 
+      url: chrome.runtime.getURL('dashboard.html?tab=ai') 
     });
   });
 
@@ -183,156 +155,5 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => {
       errorMessage.remove();
     }, 5000);
-  }
-  
-  // Function to show API key input dialog
-  function showApiKeyDialog() {
-    // Create dialog container
-    const dialog = document.createElement('div');
-    dialog.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0,0,0,0.5);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      z-index: 1000;
-    `;
-    
-    // Create dialog content
-    const dialogContent = document.createElement('div');
-    dialogContent.style.cssText = `
-      background-color: white;
-      padding: 20px;
-      border-radius: 8px;
-      width: 90%;
-      max-width: 350px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-    `;
-    
-    // Add dialog title
-    const title = document.createElement('h3');
-    title.textContent = 'Set API Key';
-    title.style.cssText = `
-      font-size: 18px;
-      margin: 0 0 16px 0;
-      color: #0f0f0f;
-    `;
-    
-    // Add dialog description
-    const description = document.createElement('p');
-    description.innerHTML = `
-      To use the video summary feature, please enter your API key. 
-      You can get one from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>.
-    `;
-    description.style.cssText = `
-      font-size: 14px;
-      margin: 0 0 16px 0;
-      color: #606060;
-    `;
-    
-    // Add API key input
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = 'Enter your API key';
-    input.style.cssText = `
-      width: 100%;
-      padding: 8px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 14px;
-      margin-bottom: 16px;
-    `;
-    
-    // Add buttons container
-    const buttons = document.createElement('div');
-    buttons.style.cssText = `
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-    `;
-    
-    // Add cancel button
-    const cancelButton = document.createElement('button');
-    cancelButton.textContent = 'Cancel';
-    cancelButton.style.cssText = `
-      padding: 8px 16px;
-      border: none;
-      border-radius: 4px;
-      font-size: 14px;
-      cursor: pointer;
-      background-color: #f1f1f1;
-      color: #0f0f0f;
-    `;
-    
-    // Add save button
-    const saveButton = document.createElement('button');
-    saveButton.textContent = 'Save';
-    saveButton.style.cssText = `
-      padding: 8px 16px;
-      border: none;
-      border-radius: 4px;
-      font-size: 14px;
-      cursor: pointer;
-      background-color: #9b87f5;
-      color: white;
-    `;
-    
-    // Add status message element
-    const statusMessage = document.createElement('div');
-    statusMessage.style.cssText = `
-      font-size: 14px;
-      margin: 16px 0 0 0;
-      display: none;
-    `;
-    
-    // Add click event to cancel button
-    cancelButton.addEventListener('click', () => {
-      document.body.removeChild(dialog);
-    });
-    
-    // Add click event to save button
-    saveButton.addEventListener('click', () => {
-      const apiKey = input.value.trim();
-      if (!apiKey) {
-        statusMessage.textContent = 'Please enter an API key';
-        statusMessage.style.color = '#ff3333';
-        statusMessage.style.display = 'block';
-        return;
-      }
-      
-      chrome.runtime.sendMessage({ 
-        action: 'saveApiKey',
-        apiKey: apiKey
-      }, (response) => {
-        if (response && response.success) {
-          document.body.removeChild(dialog);
-          location.reload(); // Reload popup to update UI
-        } else {
-          statusMessage.textContent = 'Failed to save API key';
-          statusMessage.style.color = '#ff3333';
-          statusMessage.style.display = 'block';
-        }
-      });
-    });
-    
-    // Assemble dialog
-    buttons.appendChild(cancelButton);
-    buttons.appendChild(saveButton);
-    
-    dialogContent.appendChild(title);
-    dialogContent.appendChild(description);
-    dialogContent.appendChild(input);
-    dialogContent.appendChild(buttons);
-    dialogContent.appendChild(statusMessage);
-    
-    dialog.appendChild(dialogContent);
-    document.body.appendChild(dialog);
-    
-    // Focus input field
-    input.focus();
   }
 });
