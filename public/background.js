@@ -1,4 +1,3 @@
-
 // OAuth 2.0 constants
 const CLIENT_ID = '304162096302-c470kd77du16s0lrlumobc6s8u6uleng.apps.googleusercontent.com';
 const REDIRECT_URL = chrome.identity.getRedirectURL();
@@ -403,13 +402,106 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep the message channel open for the async response
   }
 
-  // Handle video summarization with transcript fetching
-  if (request.action === 'summarizeVideo') {
-    console.log('Starting video summarization process for video:', request.videoId);
+  // NEW: Extract transcript from page and summarize video
+  if (request.action === 'extractAndSummarizeFromPage') {
+    console.log('Starting transcript extraction and summarization for video:', request.videoId);
     
     (async () => {
       try {
-        // Use the fixed API key instead of getting from storage
+        // First, find the tab with the video
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tabs || tabs.length === 0) {
+          sendResponse({ success: false, error: 'Cannot find active tab' });
+          return;
+        }
+
+        const activeTab = tabs[0];
+        
+        // Send message to the tab to extract transcript
+        chrome.tabs.sendMessage(activeTab.id, { 
+          action: 'showSummaryLoading', 
+          message: 'Extracting transcript from video...'
+        });
+        
+        // Request transcript extraction from the content script
+        chrome.tabs.sendMessage(activeTab.id, { action: 'extractTranscript' }, async (response) => {
+          if (chrome.runtime.lastError) {
+            console.error('Error requesting transcript extraction:', chrome.runtime.lastError);
+            chrome.tabs.sendMessage(activeTab.id, { 
+              action: 'summaryError', 
+              error: 'Could not extract transcript from page. Make sure captions are available for this video.'
+            });
+            sendResponse({ success: false, error: 'Transcript extraction failed: ' + chrome.runtime.lastError.message });
+            return;
+          }
+          
+          if (!response || !response.success || !response.transcript) {
+            const errorMsg = response?.error || 'Unknown error extracting transcript';
+            console.error('Transcript extraction failed:', errorMsg);
+            
+            chrome.tabs.sendMessage(activeTab.id, { 
+              action: 'summaryError', 
+              error: 'Transcript not found. This video may not have captions available.'
+            });
+            
+            sendResponse({ success: false, error: 'Transcript extraction failed: ' + errorMsg });
+            return;
+          }
+          
+          // Update loading message
+          chrome.tabs.sendMessage(activeTab.id, { 
+            action: 'showSummaryLoading', 
+            message: 'Generating summary...'
+          });
+          
+          const transcript = response.transcript;
+          console.log('Successfully extracted transcript, length:', transcript.length);
+          
+          // Now proceed with summarizing the extracted transcript
+          try {
+            const summary = await summarizeTranscript(
+              transcript, 
+              request.videoTitle || 'Unknown Video', 
+              request.channelTitle || 'Unknown Channel',
+              FIXED_AI_API_KEY
+            );
+            
+            // Store the summary in local storage
+            await storeVideoSummary(request.videoId, summary);
+            
+            // Send back to content script
+            chrome.tabs.sendMessage(activeTab.id, { 
+              action: 'displaySummary', 
+              summary: summary
+            });
+            
+            sendResponse({ success: true, summary: summary });
+          } catch (error) {
+            console.error('Error generating summary:', error);
+            chrome.tabs.sendMessage(activeTab.id, { 
+              action: 'summaryError', 
+              error: 'Could not generate summary. Please try again later.'
+            });
+            sendResponse({ success: false, error: error.message });
+          }
+        });
+        
+      } catch (error) {
+        console.error('Error in extractAndSummarizeFromPage:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    
+    return true; // Keep the message channel open for the async response
+  }
+
+  // Handle video summarization with transcript fetching
+  if (request.action === 'summarizeVideo') {
+    console.log('Starting original video summarization process for video:', request.videoId);
+    
+    (async () => {
+      try {
+        // Use the fixed API key
         const apiKey = FIXED_AI_API_KEY;
         const userToken = await chrome.storage.local.get(['userToken']).then(result => result.userToken);
         
@@ -542,7 +634,7 @@ Format your response in HTML with bullet points using <ul> and <li> tags.`;
           }
         };
 
-        console.log('Sending request to AI API for summary');
+        console.log('Sending request to Gemini API for summary');
         
         // The API endpoint with the API key as a query parameter
         const endpoint = `${GEMINI_API_URL}?key=${apiKey}`;
@@ -654,6 +746,89 @@ Format your response in HTML with bullet points using <ul> and <li> tags.`;
   // If no handlers above matched, return false to indicate we won't call sendResponse
   return false;
 });
+
+// New function to summarize transcript using Gemini API
+async function summarizeTranscript(transcript, videoTitle, channelTitle, apiKey) {
+  console.log('Summarizing transcript with length:', transcript.length);
+  
+  // Limit transcript length if it's too long (API may have token limits)
+  const maxTranscriptLength = 16000; // Adjust based on model token limits
+  const truncatedTranscript = transcript.length > maxTranscriptLength 
+    ? transcript.substring(0, maxTranscriptLength) + '...[truncated for length]' 
+    : transcript;
+    
+  const promptText = `Please summarize this YouTube video titled "${videoTitle}" by ${channelTitle}.
+    
+Here is the video transcript:
+${truncatedTranscript}
+
+Create a clear, concise summary with 3-5 main bullet points highlighting the key takeaways.
+Format your response in HTML with bullet points using <ul> and <li> tags. Make it easily scannable.
+If the transcript mentions any specific tips, statistics or actionable advice, be sure to highlight those.`;
+  
+  const requestBody = {
+    contents: [
+      {
+        parts: [
+          { text: promptText }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 800,
+      topP: 0.8,
+      topK: 40
+    }
+  };
+
+  console.log('Sending request to Gemini API for summary');
+  
+  // The API endpoint with the API key as a query parameter
+  const endpoint = `${GEMINI_API_URL}?key=${apiKey}`;
+  
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestBody)
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('API error response:', response.status, errorText);
+    
+    // Handle specific error codes with more user-friendly messages
+    let errorMessage = 'We couldn\'t generate a summary at this time.';
+    if (response.status === 400) {
+      errorMessage = 'The video content may be too complex to summarize.';
+    } else if (response.status === 403) {
+      errorMessage = 'We\'re having trouble accessing the summary service right now.';
+    } else if (response.status === 404) {
+      errorMessage = 'The summary service is temporarily unavailable.';
+    } else if (response.status === 429) {
+      errorMessage = 'We\'ve reached our daily limit for video summaries. Please try again tomorrow.';
+    }
+    
+    throw new Error(errorMessage);
+  }
+  
+  const result = await response.json();
+  console.log('API response received');
+  
+  // Extract the summary text from the response
+  if (result.candidates && result.candidates.length > 0 && 
+      result.candidates[0].content && 
+      result.candidates[0].content.parts && 
+      result.candidates[0].content.parts.length > 0) {
+      
+    const summary = result.candidates[0].content.parts[0].text;
+    return summary;
+  } else {
+    throw new Error('We couldn\'t create a summary from this video\'s content.');
+  }
+}
 
 // Helper function to process SRT transcript format
 function processSrtTranscript(srtText) {

@@ -15,9 +15,159 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (summaryButton) {
       summaryButton.click();
     }
+  } else if (message.action === 'extractTranscript') {
+    extractTranscriptFromPage().then(transcript => {
+      sendResponse({ success: true, transcript });
+    }).catch(error => {
+      console.error('Error extracting transcript:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    return true; // Keep message channel open for async response
   }
   return true;
 });
+
+// New function to extract transcript directly from YouTube's UI
+async function extractTranscriptFromPage() {
+  try {
+    console.log('Starting transcript extraction from YouTube page');
+    
+    // Check if we're on a YouTube video page
+    if (!window.location.href.includes('youtube.com/watch')) {
+      throw new Error('Not on a YouTube video page');
+    }
+    
+    // First check if transcript panel is already open
+    let transcriptPanel = document.querySelector('ytd-transcript-renderer');
+    const transcriptSearchPanel = document.querySelector('ytd-transcript-search-panel-renderer');
+    
+    // If transcript panel is not open, try to open it
+    if (!transcriptPanel && !transcriptSearchPanel) {
+      console.log('Transcript panel not found, attempting to open it');
+      
+      // Find and click the "Show transcript" button
+      const showTranscriptButton = findShowTranscriptButton();
+      
+      if (!showTranscriptButton) {
+        throw new Error('Could not find Show transcript button');
+      }
+      
+      // Click the button to open transcript
+      showTranscriptButton.click();
+      console.log('Clicked Show transcript button');
+      
+      // Wait for transcript panel to appear
+      await waitForElement('ytd-transcript-renderer, ytd-transcript-search-panel-renderer', 5000);
+      
+      // Re-query for the transcript panel
+      transcriptPanel = document.querySelector('ytd-transcript-renderer');
+      const searchPanel = document.querySelector('ytd-transcript-search-panel-renderer');
+      
+      if (!transcriptPanel && !searchPanel) {
+        throw new Error('Transcript panel did not appear after clicking button');
+      }
+    }
+    
+    // Extract the transcript content
+    console.log('Transcript panel found, extracting content');
+    const transcriptItems = document.querySelectorAll('ytd-transcript-segment-renderer');
+    
+    if (!transcriptItems || transcriptItems.length === 0) {
+      throw new Error('No transcript segments found');
+    }
+    
+    let fullTranscript = '';
+    
+    // Process each transcript segment
+    transcriptItems.forEach(segment => {
+      try {
+        // Get text content without timestamps
+        const textContent = segment.querySelector('#text')?.textContent?.trim();
+        if (textContent) {
+          fullTranscript += textContent + ' ';
+        }
+      } catch (err) {
+        console.error('Error processing transcript segment:', err);
+      }
+    });
+    
+    // Clean up the transcript
+    fullTranscript = fullTranscript.trim().replace(/\s+/g, ' ');
+    
+    if (!fullTranscript) {
+      throw new Error('Failed to extract transcript text');
+    }
+    
+    console.log('Successfully extracted transcript:', fullTranscript.substring(0, 100) + '...');
+    return fullTranscript;
+  } catch (error) {
+    console.error('Transcript extraction error:', error);
+    throw error;
+  }
+}
+
+// Helper function to find the Show transcript button
+function findShowTranscriptButton() {
+  // Try multiple selectors to find the button
+  const selectors = [
+    'button[aria-label="Show transcript"]',
+    'yt-formatted-string:contains("Show transcript")',
+    'span:contains("Show transcript")',
+    'button:contains("Show transcript")',
+    'div[id="button"]:has(span:contains("transcript"))',
+    'tp-yt-paper-button:contains("Show transcript")'
+  ];
+  
+  for (const selector of selectors) {
+    try {
+      const elements = document.querySelectorAll(selector);
+      for (const element of elements) {
+        if (element.textContent.includes('transcript')) {
+          return element;
+        }
+      }
+    } catch (err) {
+      console.log('Error with selector', selector, err);
+    }
+  }
+  
+  // Last resort: try to find by traversing the DOM for any element with "transcript" text
+  const allButtons = document.querySelectorAll('button, tp-yt-paper-button, yt-formatted-string');
+  for (const button of allButtons) {
+    if (button.textContent && button.textContent.toLowerCase().includes('transcript')) {
+      return button;
+    }
+  }
+  
+  return null;
+}
+
+// Helper function to wait for an element to appear
+function waitForElement(selector, timeout = 10000) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(selector)) {
+      return resolve(document.querySelector(selector));
+    }
+    
+    const observer = new MutationObserver(mutations => {
+      if (document.querySelector(selector)) {
+        observer.disconnect();
+        resolve(document.querySelector(selector));
+      }
+    });
+    
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+    
+    // Set timeout
+    setTimeout(() => {
+      observer.disconnect();
+      reject(new Error(`Timed out waiting for element: ${selector}`));
+    }, timeout);
+  });
+}
 
 // Display the summary in the panel
 function displaySummary(summary) {
@@ -624,7 +774,7 @@ function injectSummaryPanel() {
     summaryContent.style.display = 'none';
     
     // First show initial loading state
-    showSummaryLoading('Fetching video transcript...');
+    showSummaryLoading('Finding and extracting transcript...');
     
     // Check if we already have a cached summary
     chrome.storage.local.get(['videoSummaries'], (result) => {
@@ -648,9 +798,9 @@ function injectSummaryPanel() {
         }
       }
       
-      // Send message to background script
+      // Extract transcript directly from the YouTube page UI
       chrome.runtime.sendMessage({ 
-        action: 'summarizeVideo',
+        action: 'extractAndSummarizeFromPage',
         videoId: videoId,
         videoTitle: videoTitle,
         channelTitle: channelTitle
@@ -665,8 +815,19 @@ function injectSummaryPanel() {
           // Format and display the summary
           displaySummary(response.summary);
         } else {
-          // Show error message
-          displaySummaryError(response?.error || 'Failed to generate summary. Please try again later.');
+          // Show error message with more helpful information about what went wrong
+          const errorMsg = response?.error || 'Unknown error occurred';
+          let userFriendlyError = 'Failed to generate summary.';
+          
+          if (errorMsg.includes('transcript')) {
+            userFriendlyError = 'Could not find the transcript for this video. Make sure the video has captions available.';
+          } else if (errorMsg.includes('API')) {
+            userFriendlyError = 'There was an issue connecting to the summary service. Please try again later.';
+          } else if (errorMsg.includes('timeout')) {
+            userFriendlyError = 'The request timed out. This might be due to a very long video or slow connection.';
+          }
+          
+          displaySummaryError(userFriendlyError);
         }
       });
     });

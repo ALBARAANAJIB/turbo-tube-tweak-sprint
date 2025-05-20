@@ -111,13 +111,33 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const currentTab = tabs[0];
         if (currentTab && currentTab.url && currentTab.url.includes('youtube.com/watch')) {
-          // We're on a YouTube video page, so we can directly trigger the summary
-          chrome.tabs.sendMessage(currentTab.id, { action: 'triggerSummary' })
-            .catch(err => {
-              console.error('Error sending message to tab:', err);
-              // If message sending fails, open dashboard instead
-              chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html?tab=ai') });
+          // We're on a YouTube video page, try to directly summarize it
+          chrome.tabs.sendMessage(currentTab.id, { action: 'showSummaryLoading', message: 'Starting summary generation...' });
+          
+          // Get the video ID from the URL
+          const url = new URL(currentTab.url);
+          const videoId = url.searchParams.get('v');
+          
+          if (videoId) {
+            // Send message to background to extract transcript and summarize
+            chrome.runtime.sendMessage({ 
+              action: 'extractAndSummarizeFromPage',
+              videoId: videoId,
+              videoTitle: currentTab.title?.replace(' - YouTube', '') || 'Unknown Video'
+            }, (response) => {
+              if (!response || !response.success) {
+                console.error('Summary generation failed:', response?.error);
+                chrome.tabs.sendMessage(currentTab.id, { 
+                  action: 'summaryError', 
+                  error: response?.error || 'Failed to generate summary' 
+                });
+              }
+              // The content script will handle displaying the summary
             });
+          } else {
+            chrome.tabs.sendMessage(currentTab.id, { action: 'summaryError', error: 'Could not find video ID' });
+          }
+          
           window.close(); // Close the popup
         } else {
           // Not on a YouTube video, open dashboard with AI tab
