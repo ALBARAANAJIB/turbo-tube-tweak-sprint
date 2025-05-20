@@ -1,3 +1,4 @@
+
 // Listen for messages from the background script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'showToast') {
@@ -8,6 +9,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     displaySummaryError(message.error);
   } else if (message.action === 'showSummaryLoading') {
     showSummaryLoading(message.message || 'Fetching transcript and generating summary...');
+  } else if (message.action === 'triggerSummary') {
+    // This will be received when clicked from the popup
+    const summaryButton = document.getElementById('youtube-enhancer-ai-panel')?.querySelector('button');
+    if (summaryButton) {
+      summaryButton.click();
+    }
   }
   return true;
 });
@@ -608,7 +615,7 @@ function injectSummaryPanel() {
     }
     
     // Get video title and channel if available
-    const videoTitle = document.title.replace(' - YouTube', '');
+    const videoTitle = document.title ? document.title.replace(' - YouTube', '') : 'Unknown Title';
     const channelElement = document.querySelector('#top-row ytd-channel-name yt-formatted-string a');
     const channelTitle = channelElement ? channelElement.textContent : 'Unknown Channel';
     
@@ -740,61 +747,82 @@ function handleUrlChange() {
   
   // Create an observer to watch for DOM changes
   const observer = new MutationObserver((mutations) => {
-    // Check if URL has changed
-    if (lastUrl !== location.href) {
-      lastUrl = location.href;
-      console.log('URL changed to: ' + location.href);
-      setTimeout(checkAndInject, 1000);
-      return;
-    }
-    
-    // Check for specific mutations on liked videos page
-    if (window.location.href.includes('playlist?list=LL')) {
-      // ... keep existing code (liked videos page mutations handling)
-    }
-    
-    // Check for mutations on video page that might require reinserting the panel
-    if (window.location.href.includes('/watch')) {
-      let shouldReinject = false;
+    try {
+      // Check if URL has changed
+      if (lastUrl !== location.href) {
+        lastUrl = location.href;
+        console.log('URL changed to: ' + location.href);
+        setTimeout(checkAndInject, 1000);
+        return;
+      }
       
-      for (const mutation of mutations) {
-        // Look for changes to the related videos or sidebar
-        if (mutation.target && 
-            (mutation.target.id === 'related' || 
-             mutation.target.id === 'secondary-inner' ||
-             mutation.target.id === 'secondary')) {
-          shouldReinject = true;
-          break;
+      // Check for specific mutations on liked videos page
+      if (window.location.href.includes('playlist?list=LL')) {
+        // Check if our buttons are missing
+        const fetchButtonExists = document.getElementById('youtube-enhancer-fetch-button');
+        const exportButtonExists = document.getElementById('youtube-enhancer-export-button');
+        if (!fetchButtonExists || !exportButtonExists) {
+          console.log('Buttons missing, reinjecting');
+          injectButtons();
         }
+      }
+      
+      // Check for mutations on video page that might require reinserting the panel
+      if (window.location.href.includes('/watch')) {
+        let shouldReinject = false;
         
-        // Check if any major layout changes happened
-        if (mutation.addedNodes && mutation.addedNodes.length > 0) {
-          for (const node of mutation.addedNodes) {
-            if (node.id === 'related' || 
-                node.id === 'secondary-inner' ||
-                node.id === 'secondary') {
-              shouldReinject = true;
-              break;
+        for (const mutation of mutations) {
+          // Look for changes to the related videos or sidebar
+          if (mutation.target && 
+              (mutation.target.id === 'related' || 
+              mutation.target.id === 'secondary-inner' ||
+              mutation.target.id === 'secondary')) {
+            shouldReinject = true;
+            break;
+          }
+          
+          // Check if any major layout changes happened
+          if (mutation.addedNodes && mutation.addedNodes.length > 0) {
+            for (const node of mutation.addedNodes) {
+              if (node.id === 'related' || 
+                  node.id === 'secondary-inner' ||
+                  node.id === 'secondary') {
+                shouldReinject = true;
+                break;
+              }
             }
           }
         }
+        
+        if (shouldReinject && !document.getElementById('youtube-enhancer-ai-panel')) {
+          console.log('Detected sidebar changes - injecting summary panel');
+          setTimeout(injectSummaryPanel, 500);
+        }
       }
-      
-      if (shouldReinject && !document.getElementById('youtube-enhancer-ai-panel')) {
-        console.log('Detected sidebar changes - injecting summary panel');
-        setTimeout(injectSummaryPanel, 500);
-      }
+    } catch (err) {
+      console.error('Error in mutation observer:', err);
     }
   });
   
-  // Watch for both URL changes and content changes
-  observer.observe(document, { 
-    subtree: true, 
-    childList: true,
-    attributes: true,
-    attributeFilter: ['class', 'style', 'hidden'],
-    characterData: true
-  });
+  // Watch for both URL changes and content changes with error handling
+  try {
+    observer.observe(document, { 
+      subtree: true, 
+      childList: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden'],
+      characterData: true
+    });
+  } catch (err) {
+    console.error('Error setting up mutation observer:', err);
+    // Fallback to interval checking if observer fails
+    setInterval(() => {
+      if (lastUrl !== location.href) {
+        lastUrl = location.href;
+        checkAndInject();
+      }
+    }, 2000);
+  }
   
   // Watch for YouTube's SPA navigation events
   document.addEventListener('yt-navigate-finish', () => {
@@ -812,8 +840,8 @@ if (document.readyState === 'loading') {
 
 // Add event listener for YouTube's spfprocess event (when content refreshes)
 document.addEventListener('yt-action', (event) => {
-  if (event.detail?.actionName === 'yt-append-continuation' || 
-      event.detail?.actionName === 'ytd-update-grid-state') {
+  if (event?.detail?.actionName === 'yt-append-continuation' || 
+      event?.detail?.actionName === 'ytd-update-grid-state') {
     if (window.location.href.includes('playlist?list=LL')) {
       console.log('YouTube action detected, checking buttons');
       setTimeout(injectButtons, 1000);
@@ -843,20 +871,24 @@ document.addEventListener('visibilitychange', () => {
 
 // Also set up periodic checks as a safety measure
 setInterval(() => {
-  if (window.location.href.includes('playlist?list=LL')) {
-    const fetchButtonExists = document.getElementById('youtube-enhancer-fetch-button');
-    const exportButtonExists = document.getElementById('youtube-enhancer-export-button');
-    if (!fetchButtonExists || !exportButtonExists) {
-      console.log('Periodic check: buttons missing, reinjecting');
-      injectButtons();
+  try {
+    if (window.location.href.includes('playlist?list=LL')) {
+      const fetchButtonExists = document.getElementById('youtube-enhancer-fetch-button');
+      const exportButtonExists = document.getElementById('youtube-enhancer-export-button');
+      if (!fetchButtonExists || !exportButtonExists) {
+        console.log('Periodic check: buttons missing, reinjecting');
+        injectButtons();
+      }
     }
-  }
-  
-  if (window.location.href.includes('/watch')) {
-    const panelExists = document.getElementById('youtube-enhancer-ai-panel');
-    if (!panelExists) {
-      console.log('Periodic check: summary panel missing, reinjecting');
-      injectSummaryPanel();
+    
+    if (window.location.href.includes('/watch')) {
+      const panelExists = document.getElementById('youtube-enhancer-ai-panel');
+      if (!panelExists) {
+        console.log('Periodic check: summary panel missing, reinjecting');
+        injectSummaryPanel();
+      }
     }
+  } catch (err) {
+    console.error('Error in periodic check:', err);
   }
 }, 5000);

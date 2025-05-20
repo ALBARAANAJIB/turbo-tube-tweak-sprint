@@ -107,19 +107,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // AI Summary - Direct access to YouTube videos' summaries
   aiSummaryButton && aiSummaryButton.addEventListener('click', () => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const currentTab = tabs[0];
-      if (currentTab && currentTab.url && currentTab.url.includes('youtube.com/watch')) {
-        // We're on a YouTube video page, so we can directly trigger the summary
-        chrome.tabs.sendMessage(currentTab.id, { action: 'triggerSummary' });
-        window.close(); // Close the popup
-      } else {
-        // Not on a YouTube video, open dashboard with AI tab
-        chrome.tabs.create({ 
-          url: chrome.runtime.getURL('dashboard.html?tab=ai') 
-        });
-      }
-    });
+    try {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const currentTab = tabs[0];
+        if (currentTab && currentTab.url && currentTab.url.includes('youtube.com/watch')) {
+          // We're on a YouTube video page, so we can directly trigger the summary
+          chrome.tabs.sendMessage(currentTab.id, { action: 'triggerSummary' })
+            .catch(err => {
+              console.error('Error sending message to tab:', err);
+              // If message sending fails, open dashboard instead
+              chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html?tab=ai') });
+            });
+          window.close(); // Close the popup
+        } else {
+          // Not on a YouTube video, open dashboard with AI tab
+          chrome.tabs.create({ 
+            url: chrome.runtime.getURL('dashboard.html?tab=ai') 
+          });
+        }
+      });
+    } catch (error) {
+      console.error('Error in AI summary button click:', error);
+      // Fallback to opening dashboard
+      chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html?tab=ai') });
+    }
   });
 
   // Sign out
