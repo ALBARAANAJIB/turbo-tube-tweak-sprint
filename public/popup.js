@@ -119,20 +119,27 @@ document.addEventListener('DOMContentLoaded', () => {
           const videoId = url.searchParams.get('v');
           
           if (videoId) {
-            // Send message to background to extract transcript and summarize
-            chrome.runtime.sendMessage({ 
-              action: 'extractAndSummarizeFromPage',
-              videoId: videoId,
-              videoTitle: currentTab.title?.replace(' - YouTube', '') || 'Unknown Video'
-            }, (response) => {
-              if (!response || !response.success) {
-                console.error('Summary generation failed:', response?.error);
-                chrome.tabs.sendMessage(currentTab.id, { 
-                  action: 'summaryError', 
-                  error: response?.error || 'Failed to generate summary' 
+            // First show the transcript panel if possible
+            chrome.tabs.sendMessage(currentTab.id, { action: 'showTranscript' }, (response) => {
+              // Next, send message to extract transcript and summarize
+              // Wait a moment to make sure transcript panel is loaded
+              setTimeout(() => {
+                chrome.runtime.sendMessage({ 
+                  action: 'extractAndSummarizeFromPage',
+                  videoId: videoId,
+                  videoTitle: currentTab.title?.replace(' - YouTube', '') || 'Unknown Video',
+                  attemptTranscriptOpen: true
+                }, (response) => {
+                  if (!response || !response.success) {
+                    console.error('Summary generation failed:', response?.error);
+                    chrome.tabs.sendMessage(currentTab.id, { 
+                      action: 'summaryError', 
+                      error: response?.error || 'Failed to generate summary' 
+                    });
+                  }
+                  // The content script will handle displaying the summary
                 });
-              }
-              // The content script will handle displaying the summary
+              }, 1500); // Give some time for the transcript to open
             });
           } else {
             chrome.tabs.sendMessage(currentTab.id, { action: 'summaryError', error: 'Could not find video ID' });

@@ -402,7 +402,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep the message channel open for the async response
   }
 
-  // NEW: Extract transcript from page and summarize video
+  // Extract transcript from page and summarize video
   if (request.action === 'extractAndSummarizeFromPage') {
     console.log('Starting transcript extraction and summarization for video:', request.videoId);
     
@@ -423,69 +423,168 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           message: 'Extracting transcript from video...'
         });
         
-        // Request transcript extraction from the content script
-        chrome.tabs.sendMessage(activeTab.id, { action: 'extractTranscript' }, async (response) => {
-          if (chrome.runtime.lastError) {
-            console.error('Error requesting transcript extraction:', chrome.runtime.lastError);
-            chrome.tabs.sendMessage(activeTab.id, { 
-              action: 'summaryError', 
-              error: 'Could not extract transcript from page. Make sure captions are available for this video.'
+        // If indicated, attempt to open the transcript panel first
+        if (request.attemptTranscriptOpen) {
+          try {
+            // Try to open the transcript panel first
+            await new Promise((resolve) => {
+              chrome.tabs.sendMessage(activeTab.id, { action: 'showTranscript' }, (response) => {
+                // Wait a bit for the transcript to open
+                setTimeout(resolve, 1500);
+              });
             });
-            sendResponse({ success: false, error: 'Transcript extraction failed: ' + chrome.runtime.lastError.message });
-            return;
+          } catch (err) {
+            console.log('Error opening transcript, proceeding anyway:', err);
+            // Continue even if this fails
           }
-          
-          if (!response || !response.success || !response.transcript) {
-            const errorMsg = response?.error || 'Unknown error extracting transcript';
-            console.error('Transcript extraction failed:', errorMsg);
+        }
+        
+        // Request transcript extraction from the content script with a timeout
+        const extractTranscriptWithTimeout = () => {
+          return new Promise((resolve, reject) => {
+            let hasResponded = false;
             
-            chrome.tabs.sendMessage(activeTab.id, { 
-              action: 'summaryError', 
-              error: 'Transcript not found. This video may not have captions available.'
+            // Set a timeout for the response
+            const timeoutId = setTimeout(() => {
+              if (!hasResponded) {
+                hasResponded = true;
+                reject(new Error('Transcript extraction timed out'));
+              }
+            }, 10000); // 10 second timeout
+            
+            chrome.tabs.sendMessage(activeTab.id, { action: 'extractTranscript' }, (response) => {
+              clearTimeout(timeoutId);
+              
+              if (!hasResponded) {
+                hasResponded = true;
+                
+                if (chrome.runtime.lastError) {
+                  reject(new Error('Transcript extraction failed: ' + chrome.runtime.lastError.message));
+                } else if (!response || !response.success) {
+                  reject(new Error(response?.error || 'Unknown error extracting transcript'));
+                } else {
+                  resolve(response.transcript);
+                }
+              }
             });
-            
-            sendResponse({ success: false, error: 'Transcript extraction failed: ' + errorMsg });
-            return;
-          }
-          
+          });
+        };
+        
+        let transcript;
+        try {
           // Update loading message
           chrome.tabs.sendMessage(activeTab.id, { 
             action: 'showSummaryLoading', 
-            message: 'Generating summary...'
+            message: 'Reading video transcript...'
           });
           
-          const transcript = response.transcript;
+          transcript = await extractTranscriptWithTimeout();
           console.log('Successfully extracted transcript, length:', transcript.length);
+        } catch (error) {
+          console.error('Error extracting transcript:', error);
           
-          // Now proceed with summarizing the extracted transcript
+          // Fallback to API-based transcript if extraction fails
+          chrome.tabs.sendMessage(activeTab.id, { 
+            action: 'showSummaryLoading', 
+            message: 'Direct extraction failed. Trying alternative method...'
+          });
+          
           try {
-            const summary = await summarizeTranscript(
-              transcript, 
-              request.videoTitle || 'Unknown Video', 
-              request.channelTitle || 'Unknown Channel',
-              FIXED_AI_API_KEY
-            );
+            const result = await chrome.storage.local.get('userToken');
             
-            // Store the summary in local storage
-            await storeVideoSummary(request.videoId, summary);
-            
-            // Send back to content script
-            chrome.tabs.sendMessage(activeTab.id, { 
-              action: 'displaySummary', 
-              summary: summary
-            });
-            
-            sendResponse({ success: true, summary: summary });
-          } catch (error) {
-            console.error('Error generating summary:', error);
-            chrome.tabs.sendMessage(activeTab.id, { 
-              action: 'summaryError', 
-              error: 'Could not generate summary. Please try again later.'
-            });
-            sendResponse({ success: false, error: error.message });
+            if (result.userToken && request.videoId) {
+              // Try fetching transcript via YouTube API as fallback
+              const captionsListResponse = await fetch(`${API_BASE}/captions?part=snippet&videoId=${request.videoId}`, {
+                headers: { Authorization: `Bearer ${result.userToken}` }
+              });
+              
+              if (captionsListResponse.ok) {
+                const captionsData = await captionsListResponse.json();
+                
+                // Find English captions if available (prioritize manual ones)
+                let captionOptions = captionsData.items || [];
+                let englishCaptions = captionOptions.filter(
+                  item => item.snippet.language === 'en' || item.snippet.language === 'en-US' || item.snippet.language === 'en-GB'
+                );
+                
+                // If no English captions, use any available captions
+                if (englishCaptions.length === 0 && captionOptions.length > 0) {
+                  englishCaptions = captionOptions;
+                }
+                
+                // Sort to prioritize manual captions over auto-generated ones
+                const sortedCaptions = englishCaptions.sort((a, b) => {
+                  if (a.snippet.trackKind === 'standard' && b.snippet.trackKind !== 'standard') return -1;
+                  if (a.snippet.trackKind !== 'standard' && b.snippet.trackKind === 'standard') return 1;
+                  return 0;
+                });
+                
+                if (sortedCaptions && sortedCaptions.length > 0) {
+                  const captionId = sortedCaptions[0].id;
+                  
+                  // Get the caption content in SRT format
+                  const captionResponse = await fetch(`${API_BASE}/captions/${captionId}?tfmt=srt`, {
+                    headers: { Authorization: `Bearer ${result.userToken}` }
+                  });
+                  
+                  if (captionResponse.ok) {
+                    const captionText = await captionResponse.text();
+                    transcript = processSrtTranscript(captionText);
+                  }
+                }
+              }
+            }
+          } catch (fallbackError) {
+            console.error('Fallback transcript fetch also failed:', fallbackError);
+            // We'll continue without transcript if both methods fail
           }
+        }
+        
+        if (!transcript || transcript.trim().length === 0) {
+          chrome.tabs.sendMessage(activeTab.id, { 
+            action: 'summaryError', 
+            error: 'Could not extract transcript from this video. Please make sure captions are available.'
+          });
+          
+          sendResponse({ 
+            success: false, 
+            error: 'Transcript extraction failed. This video may not have captions available.' 
+          });
+          return;
+        }
+          
+        // Update loading message
+        chrome.tabs.sendMessage(activeTab.id, { 
+          action: 'showSummaryLoading', 
+          message: 'Generating summary...'
         });
         
+        try {
+          const summary = await summarizeTranscript(
+            transcript, 
+            request.videoTitle || 'Unknown Video', 
+            request.channelTitle || 'Unknown Channel',
+            FIXED_AI_API_KEY
+          );
+          
+          // Store the summary in local storage
+          await storeVideoSummary(request.videoId, summary);
+          
+          // Send back to content script
+          chrome.tabs.sendMessage(activeTab.id, { 
+            action: 'displaySummary', 
+            summary: summary
+          });
+          
+          sendResponse({ success: true, summary: summary });
+        } catch (error) {
+          console.error('Error generating summary:', error);
+          chrome.tabs.sendMessage(activeTab.id, { 
+            action: 'summaryError', 
+            error: 'Could not generate summary. Please try again later.'
+          });
+          sendResponse({ success: false, error: error.message });
+        }
       } catch (error) {
         console.error('Error in extractAndSummarizeFromPage:', error);
         sendResponse({ success: false, error: error.message });
@@ -757,7 +856,7 @@ async function summarizeTranscript(transcript, videoTitle, channelTitle, apiKey)
     ? transcript.substring(0, maxTranscriptLength) + '...[truncated for length]' 
     : transcript;
     
-  const promptText = `Please summarize this YouTube video titled "${videoTitle}" by ${channelTitle}.
+  const promptText = `Please summarize this YouTube video titled "${videoTitle}" by ${channelTitle || 'Unknown Creator'}.
     
 Here is the video transcript:
 ${truncatedTranscript}
