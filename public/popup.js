@@ -1,3 +1,4 @@
+
 document.addEventListener('DOMContentLoaded', () => {
   const loginButton = document.getElementById('login-button');
   const loginContainer = document.getElementById('login-container');
@@ -123,20 +124,20 @@ document.addEventListener('DOMContentLoaded', () => {
             // First send a message to show loading in the tab
             chrome.tabs.sendMessage(currentTab.id, { 
               action: 'showSummaryLoading', 
-              message: 'Starting summary generation...'
+              message: 'Starting transcript extraction...'
             });
             
-            // Request transcript extraction and summarization with proper timeout and error handling
+            // Request transcript extraction and summarization with retries and enhanced error handling
             chrome.runtime.sendMessage({ 
               action: 'extractAndSummarizeFromPage',
               videoId: videoId,
               videoTitle: currentTab.title?.replace(' - YouTube', '') || 'Unknown Video',
-              attemptTranscriptOpen: true
+              attemptTranscriptOpen: true,
+              useGemini25Flash: true // Use the new Gemini 2.5 Flash model
             }, (response) => {
               if (chrome.runtime.lastError) {
                 console.error("Error initiating summarization:", chrome.runtime.lastError);
-                // We'll let the content script handle the error display
-                return;
+                // Content script will handle the error display
               }
               
               if (!response || !response.success) {
