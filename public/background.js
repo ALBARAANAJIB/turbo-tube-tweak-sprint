@@ -417,7 +417,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const activeTab = tabs[0];
         
-        // Send message to the tab to extract transcript
+        // Send message to the tab to show loading state
         chrome.tabs.sendMessage(activeTab.id, { 
           action: 'showSummaryLoading', 
           message: 'Extracting transcript from video...'
@@ -428,62 +428,78 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           try {
             // Try to open the transcript panel first
             await new Promise((resolve) => {
-              chrome.tabs.sendMessage(activeTab.id, { action: 'showTranscript' }, (response) => {
+              chrome.tabs.sendMessage(activeTab.id, { action: 'showTranscript' }, () => {
                 // Wait a bit for the transcript to open
                 setTimeout(resolve, 1500);
               });
             });
           } catch (err) {
             console.log('Error opening transcript, proceeding anyway:', err);
-            // Continue even if this fails
           }
         }
         
-        // Request transcript extraction from the content script with a timeout
-        const extractTranscriptWithTimeout = () => {
-          return new Promise((resolve, reject) => {
-            let hasResponded = false;
-            
-            // Set a timeout for the response
-            const timeoutId = setTimeout(() => {
-              if (!hasResponded) {
-                hasResponded = true;
-                reject(new Error('Transcript extraction timed out'));
-              }
-            }, 10000); // 10 second timeout
-            
-            chrome.tabs.sendMessage(activeTab.id, { action: 'extractTranscript' }, (response) => {
-              clearTimeout(timeoutId);
-              
-              if (!hasResponded) {
-                hasResponded = true;
+        // Request transcript extraction from the content script with proper error handling
+        const extractTranscriptWithRetry = async (maxRetries = 2) => {
+          let retries = 0;
+          let lastError = null;
+          
+          while (retries <= maxRetries) {
+            try {
+              return await new Promise((resolve, reject) => {
+                const timeoutId = setTimeout(() => {
+                  reject(new Error('Transcript extraction timed out'));
+                }, 15000); // 15-second timeout
                 
-                if (chrome.runtime.lastError) {
-                  reject(new Error('Transcript extraction failed: ' + chrome.runtime.lastError.message));
-                } else if (!response || !response.success) {
-                  reject(new Error(response?.error || 'Unknown error extracting transcript'));
-                } else {
+                chrome.tabs.sendMessage(activeTab.id, { action: 'extractTranscript' }, (response) => {
+                  clearTimeout(timeoutId);
+                  
+                  if (chrome.runtime.lastError) {
+                    reject(new Error(`Chrome error: ${chrome.runtime.lastError.message}`));
+                    return;
+                  }
+                  
+                  if (!response || !response.success) {
+                    reject(new Error(response?.error || 'Unknown extraction error'));
+                    return;
+                  }
+                  
                   resolve(response.transcript);
-                }
+                });
+              });
+            } catch (error) {
+              lastError = error;
+              console.log(`Extraction attempt ${retries + 1} failed:`, error);
+              retries++;
+              
+              // Show retry message to user
+              if (retries <= maxRetries) {
+                chrome.tabs.sendMessage(activeTab.id, { 
+                  action: 'showSummaryLoading', 
+                  message: `Retrying transcript extraction (attempt ${retries + 1})...`
+                });
+                
+                // Wait before retrying
+                await new Promise(resolve => setTimeout(resolve, 1500));
               }
-            });
-          });
+            }
+          }
+          
+          throw lastError || new Error('Failed to extract transcript after multiple attempts');
         };
         
         let transcript;
         try {
-          // Update loading message
           chrome.tabs.sendMessage(activeTab.id, { 
             action: 'showSummaryLoading', 
             message: 'Reading video transcript...'
           });
           
-          transcript = await extractTranscriptWithTimeout();
+          transcript = await extractTranscriptWithRetry();
           console.log('Successfully extracted transcript, length:', transcript.length);
         } catch (error) {
           console.error('Error extracting transcript:', error);
           
-          // Fallback to API-based transcript if extraction fails
+          // Fallback to API-based transcript
           chrome.tabs.sendMessage(activeTab.id, { 
             action: 'showSummaryLoading', 
             message: 'Direct extraction failed. Trying alternative method...'
@@ -494,49 +510,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             
             if (result.userToken && request.videoId) {
               // Try fetching transcript via YouTube API as fallback
-              const captionsListResponse = await fetch(`${API_BASE}/captions?part=snippet&videoId=${request.videoId}`, {
-                headers: { Authorization: `Bearer ${result.userToken}` }
-              });
-              
-              if (captionsListResponse.ok) {
-                const captionsData = await captionsListResponse.json();
-                
-                // Find English captions if available (prioritize manual ones)
-                let captionOptions = captionsData.items || [];
-                let englishCaptions = captionOptions.filter(
-                  item => item.snippet.language === 'en' || item.snippet.language === 'en-US' || item.snippet.language === 'en-GB'
-                );
-                
-                // If no English captions, use any available captions
-                if (englishCaptions.length === 0 && captionOptions.length > 0) {
-                  englishCaptions = captionOptions;
-                }
-                
-                // Sort to prioritize manual captions over auto-generated ones
-                const sortedCaptions = englishCaptions.sort((a, b) => {
-                  if (a.snippet.trackKind === 'standard' && b.snippet.trackKind !== 'standard') return -1;
-                  if (a.snippet.trackKind !== 'standard' && b.snippet.trackKind === 'standard') return 1;
-                  return 0;
-                });
-                
-                if (sortedCaptions && sortedCaptions.length > 0) {
-                  const captionId = sortedCaptions[0].id;
-                  
-                  // Get the caption content in SRT format
-                  const captionResponse = await fetch(`${API_BASE}/captions/${captionId}?tfmt=srt`, {
-                    headers: { Authorization: `Bearer ${result.userToken}` }
-                  });
-                  
-                  if (captionResponse.ok) {
-                    const captionText = await captionResponse.text();
-                    transcript = processSrtTranscript(captionText);
-                  }
-                }
-              }
+              transcript = await fetchTranscriptFromYouTubeAPI(result.userToken, request.videoId);
             }
           } catch (fallbackError) {
             console.error('Fallback transcript fetch also failed:', fallbackError);
-            // We'll continue without transcript if both methods fail
+            
+            chrome.tabs.sendMessage(activeTab.id, { 
+              action: 'summaryError', 
+              error: 'Could not extract transcript from this video. Please make sure captions are available.'
+            });
+            
+            sendResponse({ 
+              success: false, 
+              error: 'Transcript extraction failed. This video may not have captions available.' 
+            });
+            return;
           }
         }
         
@@ -548,11 +536,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           
           sendResponse({ 
             success: false, 
-            error: 'Transcript extraction failed. This video may not have captions available.' 
+            error: 'No transcript found. This video may not have captions available.' 
           });
           return;
         }
-          
+        
         // Update loading message
         chrome.tabs.sendMessage(activeTab.id, { 
           action: 'showSummaryLoading', 
@@ -560,9 +548,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         
         try {
-          // Implement proper chunking for long transcripts
-          const chunks = chunkText(transcript, 7500); // Safe size for Gemini
-          
+          // Process transcript in chunks if needed
+          const chunks = chunkText(transcript, 7000); // Gemini context window safe size
           console.log(`Transcript split into ${chunks.length} chunks for processing`);
           
           let fullSummary = '';
@@ -574,11 +561,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               message: `Generating summary (part ${i+1}/${chunks.length})...`
             });
             
-            const chunkSummary = await summarizeWithGemini(
+            const chunkPosition = chunks.length === 1 ? 'full' : 
+                                (i === 0 ? 'start' : 
+                                 (i === chunks.length - 1 ? 'end' : 'middle'));
+            
+            const chunkSummary = await generateGeminiSummary(
               chunks[i],
               request.videoTitle || 'Unknown Video', 
-              i === 0 ? 'start' : (i === chunks.length - 1 ? 'end' : 'middle'),
-              FIXED_AI_API_KEY
+              chunkPosition
             );
             
             fullSummary += chunkSummary + (i < chunks.length - 1 ? '\n\n' : '');
@@ -591,11 +581,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               message: 'Finalizing summary...'
             });
             
-            fullSummary = await summarizeWithGemini(
+            fullSummary = await generateGeminiSummary(
               fullSummary,
               request.videoTitle || 'Unknown Video', 
-              'combine',
-              FIXED_AI_API_KEY
+              'combine'
             );
           }
           
@@ -878,8 +867,177 @@ Format your response in HTML with bullet points using <ul> and <li> tags.`;
   return false;
 });
 
+// More robust Gemini API integration with proper request format
+async function generateGeminiSummary(text, videoTitle, position = 'full') {
+  console.log(`Generating Gemini summary for position: ${position}, text length: ${text.length}`);
+  
+  let promptText;
+  
+  if (position === 'start') {
+    promptText = `Summarize the beginning part of this YouTube video titled "${videoTitle}".\n\nTranscript part:\n${text}`;
+  } else if (position === 'middle') {
+    promptText = `Summarize this middle segment of a YouTube video.\n\nTranscript part:\n${text}`;
+  } else if (position === 'end') {
+    promptText = `Summarize the final part of this YouTube video titled "${videoTitle}".\n\nTranscript part:\n${text}`;
+  } else if (position === 'combine') {
+    promptText = `Create a final, cohesive summary of this YouTube video titled "${videoTitle}" based on these partial summaries:\n\n${text}`;
+  } else {
+    promptText = `Please summarize this YouTube video titled "${videoTitle}".\n\nHere is the transcript:\n${text}\n\nCreate a clear, concise summary with 3-5 main bullet points highlighting the key takeaways. Format your response in HTML with bullet points using <ul> and <li> tags. Make it easily scannable.`;
+  }
+
+  // Format the request according to Gemini API documentation
+  const requestBody = {
+    contents: [
+      {
+        parts: [
+          { text: promptText }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 800,
+      topP: 0.8,
+      topK: 40
+    }
+  };
+  
+  // The API endpoint with the API key as a query parameter
+  const endpoint = `${GEMINI_API_URL}?key=${FIXED_AI_API_KEY}`;
+  
+  // Implement retry logic for API calls
+  const maxRetries = 2;
+  let attempt = 0;
+  let lastError = null;
+  
+  while (attempt <= maxRetries) {
+    try {
+      console.log(`API attempt ${attempt + 1}/${maxRetries + 1}`);
+      
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API error response:', response.status, errorText);
+        
+        // Handle specific error codes with more user-friendly messages
+        let errorMessage = 'We couldn\'t generate a summary at this time.';
+        if (response.status === 400) {
+          errorMessage = 'The video content may be too complex to summarize.';
+        } else if (response.status === 403) {
+          errorMessage = 'We\'re having trouble accessing the summary service right now.';
+        } else if (response.status === 404) {
+          errorMessage = 'The summary service is temporarily unavailable.';
+        } else if (response.status === 429) {
+          errorMessage = 'We\'ve reached our daily limit for video summaries. Please try again tomorrow.';
+        }
+        
+        throw new Error(errorMessage);
+      }
+      
+      const result = await response.json();
+      console.log('API response received');
+      
+      // Extract the summary text from the response according to Gemini API format
+      if (result.candidates && result.candidates.length > 0 && 
+          result.candidates[0].content && 
+          result.candidates[0].content.parts && 
+          result.candidates[0].content.parts.length > 0) {
+          
+        const summary = result.candidates[0].content.parts[0].text;
+        return summary;
+      } else {
+        throw new Error('Invalid response format from Gemini API');
+      }
+    } catch (error) {
+      lastError = error;
+      attempt++;
+      
+      // Only retry if we have attempts left and it's a potentially transient error
+      if (attempt <= maxRetries && 
+          (error.message.includes('timeout') || 
+           error.message.includes('network') || 
+           error.message.includes('429') || 
+           error.message.includes('limit'))) {
+        console.log(`Retrying after error: ${error.message}`);
+        // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
+        continue;
+      }
+      
+      // If we've exhausted retries or it's not a retryable error
+      break;
+    }
+  }
+  
+  throw lastError || new Error('Failed to generate summary after multiple attempts');
+}
+
+// Function to fetch transcript from YouTube API
+async function fetchTranscriptFromYouTubeAPI(token, videoId) {
+  console.log('Fetching transcript via YouTube API for video:', videoId);
+  
+  try {
+    // First get the list of available captions for the video
+    const captionsListResponse = await fetch(`${CAPTIONS_ENDPOINT}?part=snippet&videoId=${videoId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    
+    if (!captionsListResponse.ok) {
+      throw new Error(`YouTube API error: ${captionsListResponse.status}`);
+    }
+    
+    const captionsData = await captionsListResponse.json();
+    
+    // Find English captions if available (prioritize manual ones)
+    let captionOptions = captionsData.items || [];
+    let englishCaptions = captionOptions.filter(
+      item => item.snippet.language === 'en' || item.snippet.language === 'en-US' || item.snippet.language === 'en-GB'
+    );
+    
+    // If no English captions, use any available captions
+    if (englishCaptions.length === 0 && captionOptions.length > 0) {
+      englishCaptions = captionOptions;
+    }
+    
+    // Sort to prioritize manual captions over auto-generated ones
+    const sortedCaptions = englishCaptions.sort((a, b) => {
+      if (a.snippet.trackKind === 'standard' && b.snippet.trackKind !== 'standard') return -1;
+      if (a.snippet.trackKind !== 'standard' && b.snippet.trackKind === 'standard') return 1;
+      return 0;
+    });
+    
+    if (sortedCaptions && sortedCaptions.length > 0) {
+      const captionId = sortedCaptions[0].id;
+      
+      // Get the caption content in SRT format
+      const captionResponse = await fetch(`${CAPTIONS_ENDPOINT}/${captionId}?tfmt=srt`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (captionResponse.ok) {
+        const captionText = await captionResponse.text();
+        return processSrtTranscript(captionText);
+      }
+      
+      throw new Error('Failed to fetch caption content');
+    }
+    
+    throw new Error('No captions found for this video');
+  } catch (error) {
+    console.error('Error fetching transcript from YouTube API:', error);
+    throw error;
+  }
+}
+
 // Function to split transcript into manageable chunks to avoid token limits
-function chunkText(text, maxLength = 7500) {
+function chunkText(text, maxLength = 7000) {
   if (!text || text.length <= maxLength) return [text];
   
   const paragraphs = text.split('\n');
@@ -898,103 +1056,9 @@ function chunkText(text, maxLength = 7500) {
   return chunks;
 }
 
-// New function to summarize with Gemini API using the correct format
-async function summarizeWithGemini(text, videoTitle, position = 'full', apiKey) {
-  console.log(`Summarizing with Gemini API, position: ${position}, text length: ${text.length}`);
-  
-  let promptText;
-  
-  if (position === 'start') {
-    promptText = `Summarize the beginning part of this YouTube video titled "${videoTitle}".\n\nTranscript part:\n${text}`;
-  } else if (position === 'middle') {
-    promptText = `Summarize this middle segment of a YouTube video.\n\nTranscript part:\n${text}`;
-  } else if (position === 'end') {
-    promptText = `Summarize the final part of this YouTube video titled "${videoTitle}".\n\nTranscript part:\n${text}`;
-  } else if (position === 'combine') {
-    promptText = `Create a final, cohesive summary of this YouTube video titled "${videoTitle}" based on these partial summaries:\n\n${text}`;
-  } else {
-    promptText = `Please summarize this YouTube video titled "${videoTitle}".\n\nHere is the transcript:\n${text}\n\nCreate a clear, concise summary with 3-5 main bullet points highlighting the key takeaways. Format your response in HTML with bullet points using <ul> and <li> tags. Make it easily scannable.`;
-  }
-  
-  // Format the request according to Gemini API documentation
-  const requestBody = {
-    contents: [
-      {
-        parts: [
-          { text: promptText }
-        ]
-      }
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 800,
-      topP: 0.8,
-      topK: 40
-    }
-  };
-
-  // The API endpoint with the API key as a query parameter
-  const endpoint = `${GEMINI_API_URL}?key=${apiKey}`;
-  
-  try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(requestBody)
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('API error response:', response.status, errorText);
-      
-      // Handle specific error codes with more user-friendly messages
-      let errorMessage = 'We couldn\'t generate a summary at this time.';
-      if (response.status === 400) {
-        errorMessage = 'The video content may be too complex to summarize.';
-      } else if (response.status === 403) {
-        errorMessage = 'We\'re having trouble accessing the summary service right now.';
-      } else if (response.status === 404) {
-        errorMessage = 'The summary service is temporarily unavailable.';
-      } else if (response.status === 429) {
-        errorMessage = 'We\'ve reached our daily limit for video summaries. Please try again tomorrow.';
-      }
-      
-      throw new Error(errorMessage);
-    }
-    
-    const result = await response.json();
-    console.log('API response received');
-    
-    // Extract the summary text from the response according to Gemini API format
-    if (result.candidates && result.candidates.length > 0 && 
-        result.candidates[0].content && 
-        result.candidates[0].content.parts && 
-        result.candidates[0].content.parts.length > 0) {
-        
-      const summary = result.candidates[0].content.parts[0].text;
-      return summary;
-    } else {
-      throw new Error('Invalid response format from Gemini API');
-    }
-  } catch (error) {
-    console.error('Error in Gemini API call:', error);
-    throw new Error('Failed to generate summary: ' + (error.message || 'Unknown error'));
-  }
-}
-
 // Helper function to process SRT transcript format
 function processSrtTranscript(srtText) {
   if (!srtText) return '';
-  
-  // SRT format has entries like:
-  // 1
-  // 00:00:01,000 --> 00:00:04,000
-  // Text content here
-  //
-  // 2
-  // ...
   
   try {
     // Split by double newline which usually separates entries

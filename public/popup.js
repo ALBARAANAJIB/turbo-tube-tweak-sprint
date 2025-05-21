@@ -1,4 +1,3 @@
-
 document.addEventListener('DOMContentLoaded', () => {
   const loginButton = document.getElementById('login-button');
   const loginContainer = document.getElementById('login-container');
@@ -112,7 +111,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const currentTab = tabs[0];
         if (currentTab && currentTab.url && currentTab.url.includes('youtube.com/watch')) {
           // We're on a YouTube video page, try to directly summarize it
-          chrome.tabs.sendMessage(currentTab.id, { action: 'showSummaryLoading', message: 'Starting summary generation...' });
           
           // Get the video ID from the URL
           const url = new URL(currentTab.url);
@@ -122,29 +120,38 @@ document.addEventListener('DOMContentLoaded', () => {
             // Show loading UI to user
             showSuccessMessage(aiSummaryButton, "Working on summary...");
             
-            // First try to open the transcript panel if possible
-            chrome.tabs.sendMessage(currentTab.id, { action: 'showTranscript' }, (response) => {
-              // Wait for transcript to load
-              setTimeout(() => {
-                // Next, request transcript extraction and summarization
-                chrome.runtime.sendMessage({ 
-                  action: 'extractAndSummarizeFromPage',
-                  videoId: videoId,
-                  videoTitle: currentTab.title?.replace(' - YouTube', '') || 'Unknown Video',
-                  attemptTranscriptOpen: true
-                }, (response) => {
-                  if (!response || !response.success) {
-                    console.error('Summary generation failed:', response?.error);
-                    chrome.tabs.sendMessage(currentTab.id, { 
-                      action: 'summaryError', 
-                      error: response?.error || 'Failed to generate summary. Please try again.' 
-                    });
-                  }
+            // First send a message to show loading in the tab
+            chrome.tabs.sendMessage(currentTab.id, { 
+              action: 'showSummaryLoading', 
+              message: 'Starting summary generation...'
+            });
+            
+            // Request transcript extraction and summarization with proper timeout and error handling
+            chrome.runtime.sendMessage({ 
+              action: 'extractAndSummarizeFromPage',
+              videoId: videoId,
+              videoTitle: currentTab.title?.replace(' - YouTube', '') || 'Unknown Video',
+              attemptTranscriptOpen: true
+            }, (response) => {
+              if (chrome.runtime.lastError) {
+                console.error("Error initiating summarization:", chrome.runtime.lastError);
+                // We'll let the content script handle the error display
+                return;
+              }
+              
+              if (!response || !response.success) {
+                console.error('Summary generation failed:', response?.error);
+                chrome.tabs.sendMessage(currentTab.id, { 
+                  action: 'summaryError', 
+                  error: response?.error || 'Failed to generate summary. Please try again.' 
                 });
-              }, 1500); // Give time for transcript to load
+              }
             });
           } else {
-            chrome.tabs.sendMessage(currentTab.id, { action: 'summaryError', error: 'Could not find video ID' });
+            chrome.tabs.sendMessage(currentTab.id, { 
+              action: 'summaryError', 
+              error: 'Could not find video ID' 
+            });
           }
           
           window.close(); // Close the popup
