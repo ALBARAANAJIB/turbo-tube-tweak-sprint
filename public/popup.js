@@ -119,11 +119,14 @@ document.addEventListener('DOMContentLoaded', () => {
           const videoId = url.searchParams.get('v');
           
           if (videoId) {
-            // First show the transcript panel if possible
+            // Show loading UI to user
+            showSuccessMessage(aiSummaryButton, "Working on summary...");
+            
+            // First try to open the transcript panel if possible
             chrome.tabs.sendMessage(currentTab.id, { action: 'showTranscript' }, (response) => {
-              // Next, send message to extract transcript and summarize
-              // Wait a moment to make sure transcript panel is loaded
+              // Wait for transcript to load
               setTimeout(() => {
+                // Next, request transcript extraction and summarization
                 chrome.runtime.sendMessage({ 
                   action: 'extractAndSummarizeFromPage',
                   videoId: videoId,
@@ -134,12 +137,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     console.error('Summary generation failed:', response?.error);
                     chrome.tabs.sendMessage(currentTab.id, { 
                       action: 'summaryError', 
-                      error: response?.error || 'Failed to generate summary' 
+                      error: response?.error || 'Failed to generate summary. Please try again.' 
                     });
                   }
-                  // The content script will handle displaying the summary
                 });
-              }, 1500); // Give some time for the transcript to open
+              }, 1500); // Give time for transcript to load
             });
           } else {
             chrome.tabs.sendMessage(currentTab.id, { action: 'summaryError', error: 'Could not find video ID' });
